@@ -8,26 +8,7 @@ services:
     env_file: .env
     restart: unless-stopped
     depends_on:
-      worker:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile
-    image: kodera-app
-    command: ["arq", "app.workers.tasks.WorkerSettings"]
-    env_file: .env
-    restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          memory: 128M
-    # The Dockerfile HEALTHCHECK probes the web port; the worker has none.
-    healthcheck:
-      disable: true
-
-  postgres:
+      postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -50,6 +31,25 @@ services:
       timeout: 3s
       start_period: 20s
       retries: 3
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: kodera-app
+    command: ["arq", "app.workers.tasks.WorkerSettings"]
+    env_file: .env
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    # The image HEALTHCHECK probes the web port, which the worker does not serve.
+    healthcheck:
+      disable: true
 
   postgres:
     image: postgres:17-alpine
