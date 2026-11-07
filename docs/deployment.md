@@ -90,8 +90,8 @@ The first HTTPS request may fail for up to a minute while Caddy obtains the cert
 If it keeps failing: `docker compose -f docker-compose.yml -f docker-compose.prod.yml logs caddy`
 (usually DNS not pointing at the server yet, or port 80/443 closed).
 
-Point Telnyx at: webhook `https://YOUR_DOMAIN/webhooks/telnyx` (confirm the path in
-`app/api/routes/webhooks.py`) and media stream `wss://YOUR_DOMAIN/ws/...`.
+Point Telnyx at: webhook `https://YOUR_DOMAIN/...` (the webhook and `/ws/*` routes are not implemented yet; use the paths in
+`app/api/`), and the media stream `wss://YOUR_DOMAIN/ws/...`.
 
 Tip: save a shortcut so the commands below are shorter:
 
