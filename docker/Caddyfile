@@ -1,8 +1,30 @@
-# DOMAIN comes from the environment (set in .env, passed by docker-compose.yml).
-# Caddy gets and renews a Let's Encrypt certificate for it automatically.
-# reverse_proxy passes WebSocket upgrades through with no extra config,
-# which the carrier media stream (wss://DOMAIN/...) needs.
+# DOMAIN comes from the environment (set in .env, passed by docker-compose).
+# Caddy gets and renews a Let's Encrypt certificate for it automatically
+# (needs the DNS A record to point here and ports 80/443 open).
 
 {$DOMAIN} {
-	reverse_proxy app:8000
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# Carrier media streams (wss://DOMAIN/ws/...). Caddy upgrades WebSocket
+	# connections automatically; no timeouts so long calls are not cut off.
+	handle /ws/* {
+		reverse_proxy app:8000
+	}
+
+	handle {
+		reverse_proxy app:8000
+	}
+
+	log {
+		output stdout
+		format json
+	}
 }
