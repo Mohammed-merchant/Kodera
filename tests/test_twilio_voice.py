@@ -1,6 +1,6 @@
 from collections.abc import Iterator
+from typing import Any
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
@@ -35,7 +35,7 @@ def client() -> Iterator[TestClient]:
     app.dependency_overrides.clear()
 
 
-def post(client: TestClient, form: dict[str, str]) -> httpx.Response:
+def post(client: TestClient, form: dict[str, str]) -> Any:
     sig = RequestValidator(TOKEN).compute_signature(URL, form)
     return client.post("/webhooks/twilio/voice", data=form, headers={"X-Twilio-Signature": sig})
 
