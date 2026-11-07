@@ -1,0 +1,8 @@
+# DOMAIN comes from the environment (set in .env, passed by docker-compose.yml).
+# Caddy gets and renews a Let's Encrypt certificate for it automatically.
+# reverse_proxy passes WebSocket upgrades through with no extra config,
+# which the carrier media stream (wss://DOMAIN/...) needs.
+
+{$DOMAIN} {
+	reverse_proxy app:8000
+}
