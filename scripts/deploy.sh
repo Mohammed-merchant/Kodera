@@ -30,6 +30,9 @@ echo "==> Deploying commit $(git rev-parse --short HEAD)"
 echo "==> Building and starting"
 "${COMPOSE[@]}" up -d --build --remove-orphans
 
+echo "==> Applying database migrations"
+"${COMPOSE[@]}" run --rm --no-deps app alembic -c app/db/alembic.ini upgrade head
+
 echo "==> Waiting up to ${TIMEOUT}s for services to become healthy"
 deadline=$((SECONDS + TIMEOUT))
 bad=""
