@@ -23,6 +23,16 @@ services:
         limits:
           memory: 512M
 
+  worker:
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      APP_ENV: production
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
   postgres:
     restart: unless-stopped
     logging: *default-logging

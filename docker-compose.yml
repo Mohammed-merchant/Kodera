@@ -1,4 +1,4 @@
-# Sized for an AWS t3.small (2 vCPU, 2 GB RAM). Total limits: ~1.1 GB.
+# Sized for an AWS t3.small (2 vCPU, 2 GB RAM). Total limits: ~1.2 GB.
 
 services:
   app:
@@ -8,7 +8,26 @@ services:
     env_file: .env
     restart: unless-stopped
     depends_on:
-      postgres:
+      worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: kodera-app
+    command: ["arq", "app.workers.tasks.WorkerSettings"]
+    env_file: .env
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    # The Dockerfile HEALTHCHECK probes the web port; the worker has none.
+    healthcheck:
+      disable: true
+
+  postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
