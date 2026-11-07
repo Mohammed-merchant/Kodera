@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from app import __version__
 from app.api.routes import health, webhooks
+from app.api.ws import media
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
 from app.db.session import create_session_factory
@@ -37,3 +38,4 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="AI Calling Agent", version=__version__, lifespan=lifespan)
 app.include_router(health.router)
 app.include_router(webhooks.router)
+app.include_router(media.router)
