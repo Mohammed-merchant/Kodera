@@ -1,0 +1,70 @@
+# Production override for a 2 GB AWS t3.small. Use together with the base file:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# Memory limits add up to ~1.2 GB, leaving room for the OS, Docker and swap.
+# Needs Docker Compose v2.24+ (for the !reset tag).
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  app:
+    # Only Caddy is reachable from outside. Drop the localhost dev port.
+    ports: !reset []
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      APP_ENV: production
+    stop_grace_period: 30s   # let live calls finish on restart
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  postgres:
+    restart: unless-stopped
+    logging: *default-logging
+    ports: !reset []
+    shm_size: 64m
+    # Small settings for a shared 384 MB budget.
+    command: >
+      postgres
+      -c shared_buffers=64MB
+      -c effective_cache_size=192MB
+      -c work_mem=2MB
+      -c maintenance_work_mem=32MB
+      -c max_connections=30
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+
+  redis:
+    restart: unless-stopped
+    logging: *default-logging
+    ports: !reset []
+    # maxmemory 128mb as asked. The container limit is 192M (not 128M) because
+    # Redis needs headroom above maxmemory for buffers and AOF rewrites;
+    # at 128M it would be OOM-killed. noeviction: queue jobs and call state are
+    # never silently dropped; writes fail loudly when full instead.
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 128mb
+      --maxmemory-policy noeviction
+    deploy:
+      resources:
+        limits:
+          memory: 192M
+
+  caddy:
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
+    deploy:
+      resources:
+        limits:
+          memory: 64M
