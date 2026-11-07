@@ -1,4 +1,67 @@
-"""Database models.
+"""Database models: calls, call events and transcript turns."""
 
-Future: SQLAlchemy models for calls, transcripts and consent records.
-"""
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+# BIGINT identity on Postgres, plain INTEGER on SQLite (used in tests only).
+BigIntPK = BigInteger().with_variant(Integer(), "sqlite")
+JsonType = JSON().with_variant(JSONB(), "postgresql")
+
+
+def utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Call(Base):
+    __tablename__ = "calls"
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    provider: Mapped[str] = mapped_column(String(20), default="twilio")
+    # Carrier call id (Twilio CallSid). Unique, so a call is stored once.
+    provider_call_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    direction: Mapped[str | None] = mapped_column(String(20))
+    from_number: Mapped[str | None] = mapped_column(String(32))
+    to_number: Mapped[str | None] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(20), default="ringing")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    duration_seconds: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    events: Mapped[list["CallEvent"]] = relationship(back_populates="call")
+    turns: Mapped[list["TranscriptTurn"]] = relationship(back_populates="call")
+
+
+class CallEvent(Base):
+    __tablename__ = "call_events"
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    call_id: Mapped[int] = mapped_column(ForeignKey("calls.id", ondelete="CASCADE"), index=True)
+    type: Mapped[str] = mapped_column(String(64))
+    data: Mapped[dict[str, Any]] = mapped_column(JsonType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    call: Mapped[Call] = relationship(back_populates="events")
+
+
+class TranscriptTurn(Base):
+    __tablename__ = "transcript_turns"
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    call_id: Mapped[int] = mapped_column(ForeignKey("calls.id", ondelete="CASCADE"), index=True)
+    role: Mapped[str] = mapped_column(String(20))  # "caller" or "agent"
+    text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    call: Mapped[Call] = relationship(back_populates="turns")
