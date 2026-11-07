@@ -4,6 +4,8 @@ Twilio webhook signature check lives here. Future: Telnyx webhook signatures
 (Ed25519 with TELNYX_PUBLIC_KEY) and the GATEWAY_API_KEY check for admin routes.
 """
 
+import hmac
+from hashlib import sha256
 from typing import Annotated
 
 import structlog
@@ -59,3 +61,12 @@ async def verify_twilio_signature(
 
 
 TwilioParams = Annotated[QueryParams, Depends(verify_twilio_signature)]
+
+
+def stream_token(call_sid: str, secret: str) -> str:
+    """Token for the audio WebSocket. Twilio passes it back to us in the stream's start event."""
+    return hmac.new(secret.encode(), f"stream:{call_sid}".encode(), sha256).hexdigest()
+
+
+def verify_stream_token(call_sid: str, token: str, secret: str) -> bool:
+    return bool(secret) and hmac.compare_digest(stream_token(call_sid, secret), token)

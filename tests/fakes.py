@@ -16,6 +16,9 @@ class FakeRedis:
         self.keys[key] = value
         return True
 
+    async def delete(self, *names: str) -> int:
+        return sum(self.keys.pop(n, None) is not None for n in names)
+
     async def xadd(
         self, name: str, fields: dict[str, str], maxlen: int | None = None, approximate: bool = True
     ) -> str:

@@ -11,6 +11,7 @@ from app import __version__
 from app.api.routes import health, webhooks
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
+from app.db.session import create_session_factory
 
 settings = get_settings()
 setup_logging(settings.log_level)
@@ -22,6 +23,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Clients connect lazily, so startup does not fail if a dependency is down;
     # /ready reports that instead.
     app.state.db_engine = create_async_engine(settings.database_url, pool_size=5, max_overflow=5)
+    app.state.session_factory = create_session_factory(app.state.db_engine)
     app.state.redis = Redis.from_url(settings.redis_url)
     log.info("app_started", version=__version__, env=settings.app_env)
     try:

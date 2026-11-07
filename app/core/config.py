@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     twilio_account_sid: str = ""
     twilio_auth_token: SecretStr = SecretStr("")
     twilio_phone_number: str = ""
+    # Off by default: calls only hear the greeting. Turn on to open the audio stream.
+    twilio_stream_enabled: bool = False
+    # Hard limit per call so a stuck call cannot burn the Twilio balance.
+    max_call_seconds: int = 120
 
     llm_base_url: str = "http://localhost:8001/v1"
     llm_api_key: SecretStr = SecretStr("")

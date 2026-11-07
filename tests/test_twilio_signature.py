@@ -10,7 +10,7 @@ from app.core.config import Settings, get_settings
 from app.core.security import TwilioParams
 
 TOKEN = "test-auth-token"
-BASE = "https://calls.example.com"
+BASE = "https://industinternational.com"
 FORM = {"CallSid": "CA123", "From": "+15551230000", "To": "+15550000000"}
 
 
