@@ -52,5 +52,5 @@ plugins = ["pydantic.mypy"]
 files = ["app", "tests"]
 
 [[tool.mypy.overrides]]
-module = ["arq.*", "pipecat.*"]
+module = ["arq.*", "pipecat.*", "twilio.*"]
 ignore_missing_imports = true
