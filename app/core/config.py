@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     telnyx_public_key: str = ""
     telnyx_connection_id: str = ""
 
+    twilio_account_sid: str = ""
+    twilio_auth_token: SecretStr = SecretStr("")
+    twilio_phone_number: str = ""
+
     llm_base_url: str = "http://localhost:8001/v1"
     llm_api_key: SecretStr = SecretStr("")
     llm_model: str = ""
