@@ -43,6 +43,9 @@ async def _close_quietly(ws: WebSocket, code: int = 1000) -> None:
 
 @router.websocket("/ws/media")
 async def media_stream(ws: WebSocket, settings: Annotated[Settings, Depends(get_settings)]) -> None:
+    if settings.call_provider != "twilio":
+        await ws.close(code=POLICY_VIOLATION)
+        return
     await ws.accept()
     call_sid = ""
     stream_sid = ""

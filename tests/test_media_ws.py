@@ -38,7 +38,12 @@ def media_msg(track: str = "inbound") -> str:
 
 
 def _settings() -> Settings:
-    return Settings(_env_file=None, twilio_auth_token=SecretStr(TOKEN), max_call_seconds=5)
+    return Settings(
+        _env_file=None,
+        twilio_auth_token=SecretStr(TOKEN),
+        max_call_seconds=5,
+        call_provider="twilio",
+    )
 
 
 SAVED: list[tuple[str, str, dict[str, Any]]] = []

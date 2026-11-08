@@ -15,11 +15,17 @@ from twilio.twiml.voice_response import Connect, VoiceResponse
 
 from app.business.call_manager import record_call_started, record_call_status
 from app.core.config import Settings, get_settings
+from app.core.exotel_security import require_provider
+from app.core.privacy import mask_number
 from app.core.security import TwilioParams, stream_token
 
 log = structlog.get_logger(__name__)
 
-router = APIRouter(prefix="/webhooks/twilio", tags=["webhooks"])
+router = APIRouter(
+    prefix="/webhooks/twilio",
+    tags=["webhooks"],
+    dependencies=[Depends(require_provider("twilio"))],
+)
 
 # The greeting also discloses that the caller is talking to an AI.
 GREETING = "Hello, this is our AI assistant. Goodbye."
@@ -61,11 +67,6 @@ def build_voice_twiml(call_sid: str, settings: Settings) -> str:
     stream.parameter(name="token", value=token)
     response.append(connect)
     return str(response)
-
-
-def mask_number(number: str) -> str:
-    """Keep only the last 4 digits so phone numbers never land in logs in full."""
-    return f"***{number[-4:]}" if len(number) > 4 else "***"
 
 
 def _checked_call_sid(params: QueryParams, settings: Settings) -> str:

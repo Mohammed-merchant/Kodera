@@ -23,6 +23,19 @@ class Settings(BaseSettings):
     telnyx_public_key: str = ""
     telnyx_connection_id: str = ""
 
+    # Which carrier is active. Only that carrier's webhook and WebSocket routes answer.
+    call_provider: Literal["twilio", "exotel"] = "exotel"
+
+    # Exotel: Settings > API Settings in the Exotel dashboard.
+    exotel_api_key: SecretStr = SecretStr("")
+    exotel_api_token: SecretStr = SecretStr("")
+    exotel_account_sid: str = ""
+    exotel_phone_number: str = ""  # your ExoPhone
+    # Secret put in the Passthru URL as ?token=... (Exotel documents no webhook signature).
+    exotel_webhook_secret: SecretStr = SecretStr("")
+    # Optional comma-separated allowlist of Exotel source IPs (ask Exotel support for them).
+    exotel_allowed_ips: str = ""
+
     twilio_account_sid: str = ""
     twilio_auth_token: SecretStr = SecretStr("")
     twilio_phone_number: str = ""
@@ -38,6 +51,10 @@ class Settings(BaseSettings):
     tts_base_url: str = "http://localhost:8003/v1"
 
     gateway_api_key: SecretStr = SecretStr("")
+
+    @property
+    def exotel_allowed_ip_list(self) -> list[str]:
+        return [ip.strip() for ip in self.exotel_allowed_ips.split(",") if ip.strip()]
 
 
 @lru_cache

@@ -9,8 +9,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from twilio.request_validator import RequestValidator
 
-from app.api.routes.webhooks import GREETING, mask_number
+from app.api.routes.webhooks import GREETING
 from app.core.config import Settings, get_settings
+from app.core.privacy import mask_number
 from app.core.security import verify_stream_token
 from app.db.models import Call, CallEvent
 from app.events.publisher import STREAM
@@ -49,6 +50,7 @@ def _settings(**extra: Any) -> Settings:
         public_base_url=BASE,
         twilio_auth_token=SecretStr(TOKEN),
         twilio_account_sid=ACCOUNT,
+        call_provider="twilio",
         **extra,
     )
 

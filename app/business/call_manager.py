@@ -52,15 +52,17 @@ async def record_call_started(
     from_number: str,
     to_number: str,
     direction: str,
+    provider: str = "twilio",
 ) -> bool:
     return await _record(
         session_factory,
         redis,
-        dedupe_key=f"twilio:voice:{call_sid}",
+        dedupe_key=f"{provider}:voice:{call_sid}",
         call_sid=call_sid,
         event_type="call.started",
         event_data={"direction": direction},
         publish_as="call.started",
+        provider=provider,
         direction=direction,
         from_number=from_number,
         to_number=to_number,
@@ -75,6 +77,7 @@ async def record_call_status(
     call_sid: str,
     status: str,
     duration_seconds: int | None,
+    provider: str = "twilio",
 ) -> bool:
     finished = status in TERMINAL_STATUSES
     data: dict[str, Any] = {"status": status}
@@ -83,21 +86,26 @@ async def record_call_status(
     return await _record(
         session_factory,
         redis,
-        dedupe_key=f"twilio:status:{call_sid}:{status}",
+        dedupe_key=f"{provider}:status:{call_sid}:{status}",
         call_sid=call_sid,
         event_type=f"call.status.{status}",
         event_data=data,
         publish_as="call.completed" if finished else None,
+        provider=provider,
         status=status,
         duration_seconds=duration_seconds,
     )
 
 
 async def record_stream_event(
-    session_factory: SessionFactory, call_sid: str, event_type: str, data: dict[str, Any]
+    session_factory: SessionFactory,
+    call_sid: str,
+    event_type: str,
+    data: dict[str, Any],
+    provider: str = "twilio",
 ) -> None:
-    """Save a media-stream event (stream.started / stream.stopped) for an existing call."""
+    """Save a media-stream event (stream.started / stream.stopped) for a call."""
     async with session_factory() as session:
-        call = await upsert_call(session, call_sid)
+        call = await upsert_call(session, call_sid, provider=provider)
         await add_event(session, call, event_type, data)
         await session.commit()
