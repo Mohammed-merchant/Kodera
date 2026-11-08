@@ -11,3 +11,5 @@ tests
 docs
 scripts
 model_server
+*.pem
+*.key

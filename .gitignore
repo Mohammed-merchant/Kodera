@@ -23,3 +23,8 @@ htmlcov/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Private keys and certificates: never commit
+*.pem
+*.key
+*.pem.pub
