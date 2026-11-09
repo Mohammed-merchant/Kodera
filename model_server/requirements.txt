@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+httpx
+faster-whisper
+piper-tts
+python-multipart
