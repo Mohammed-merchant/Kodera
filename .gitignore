@@ -28,3 +28,8 @@ Thumbs.db
 *.pem
 *.key
 *.pem.pub
+
+# GPU model files (large, downloaded on the GPU machine)
+model_server/models/
+*.gguf
+*.onnx

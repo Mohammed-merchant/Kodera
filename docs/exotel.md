@@ -80,6 +80,25 @@ You should hear your own voice come back (a short delay is normal).
   production numbers. Check what your plan allows.
 - No outbound calling yet (the Exotel Connect API is not wired up).
 
+## 6. The Exotel number does not reach the server
+
+First run `.venv/Scripts/python scripts/check_exotel.py`. It checks DNS/TLS, the Passthru
+URL and the WebSocket Basic auth from outside. If it prints "Server side is fine", the fault
+is in the Exotel dashboard. Then place a test call and look at the server log (section 4):
+
+| What you see | Cause and fix |
+|---|---|
+| Nothing at all in the log | Exotel never called us. The ExoPhone is not attached to the flow, the flow was not saved, or the trial account blocks the call (inbound is "Limited" on trial: call from a number you verified in Exotel; KYC is needed for production numbers). |
+| `exotel_webhook_bad_token` | The `?token=` in the Passthru applet differs from `EXOTEL_WEBHOOK_SECRET` in the **server's** `.env`. Copy it exactly, no spaces or quotes. |
+| `exotel_webhook_secret_not_configured` (HTTP 503) | `EXOTEL_WEBHOOK_SECRET` is missing from the server's `.env`. Add it, then `bash scripts/deploy.sh`. |
+| `exotel_call_received` but no `exotel_stream_started` | The Voicebot applet never opened the WebSocket: wrong URL, or Voicebot/streaming is not enabled on your Exotel account (ask Exotel support to enable it). The URL must be `wss://KEY:TOKEN@domain/ws/exotel`. |
+| `exotel_ws_rejected` | Key or token in the Voicebot URL differ from the server's `.env`. |
+| `exotel_wrong_account` | `EXOTEL_ACCOUNT_SID` on the server differs from the account that sent the call. |
+
+Other things that must match: the flow uses the same domain as `DOMAIN` / `PUBLIC_BASE_URL`,
+the DNS A record points at the server's Elastic IP, and ports 80 and 443 are open in the
+AWS security group.
+
 ## Switching back to Twilio
 
 Set `CALL_PROVIDER=twilio` in `.env` and redeploy. See the Twilio notes in `README.md`.
