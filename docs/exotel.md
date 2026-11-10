@@ -99,6 +99,19 @@ Other things that must match: the flow uses the same domain as `DOMAIN` / `PUBLI
 the DNS A record points at the server's Elastic IP, and ports 80 and 443 are open in the
 AWS security group.
 
+## Voice agent (answering the call)
+
+After the Voicebot applet connects, `app/pipeline/voice_pipeline.py` runs the call:
+`caller audio -> Silero VAD -> STT -> LLM -> TTS -> caller`. STT, LLM and TTS run on the GPU
+server (`model_server/`), reached over the URLs in `.env` (`LLM_BASE_URL`, `STT_BASE_URL`,
+`TTS_BASE_URL`, one shared `LLM_API_KEY`). The agent greets first, and the caller can interrupt.
+
+- If the GPU server is down the call is ended at once (log: `gpu_server_unreachable`).
+- The agent's name, greeting, system prompt and limits are in `app/core/config.py` and
+  `app/pipeline/prompts/`.
+- `VOICE_AGENT_ENABLED=false` goes back to the echo test (caller hears their own voice).
+- New log lines: `voice_agent_ready` (at start-up), `gpu_server_unreachable`, `agent_failed`.
+
 ## Switching back to Twilio
 
 Set `CALL_PROVIDER=twilio` in `.env` and redeploy. See the Twilio notes in `README.md`.

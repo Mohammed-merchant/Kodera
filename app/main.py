@@ -1,5 +1,6 @@
 """FastAPI application entrypoint."""
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -13,10 +14,19 @@ from app.api.ws import exotel_media, media
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
 from app.db.session import create_session_factory
+from app.pipeline.voice_pipeline import warm_up
 
 settings = get_settings()
 setup_logging(settings.log_level)
 log = get_logger(__name__)
+
+
+def _warm_up_agent() -> None:
+    try:
+        warm_up()
+        log.info("voice_agent_ready")
+    except Exception:
+        log.exception("voice_agent_warm_up_failed")
 
 
 @asynccontextmanager
@@ -27,9 +37,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.session_factory = create_session_factory(app.state.db_engine)
     app.state.redis = Redis.from_url(settings.redis_url)
     log.info("app_started", version=__version__, env=settings.app_env)
+    warm_up_task = None
+    if settings.voice_agent_enabled:
+        # Runs in a thread so startup (and /health) are not delayed.
+        warm_up_task = asyncio.create_task(asyncio.to_thread(_warm_up_agent))
     try:
         yield
     finally:
+        if warm_up_task:
+            warm_up_task.cancel()
         await app.state.redis.aclose()
         await app.state.db_engine.dispose()
         log.info("app_stopped")

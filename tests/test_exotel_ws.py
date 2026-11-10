@@ -56,6 +56,7 @@ async def fake_record(
 def _settings(**extra: Any) -> Settings:
     values: dict[str, Any] = {
         "call_provider": "exotel",
+        "voice_agent_enabled": False,  # these tests cover the echo mode
         "exotel_api_key": SecretStr(KEY),
         "exotel_api_token": SecretStr(TOKEN),
         "exotel_account_sid": ACCOUNT,

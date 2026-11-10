@@ -1,5 +1,37 @@
-"""Pipeline service factories.
+"""Pipecat services pointed at the GPU model server (OpenAI-compatible HTTP).
 
-Future: create Pipecat OpenAI-compatible STT, LLM and TTS services pointed at
-the GPU model server (STT_BASE_URL, LLM_BASE_URL, TTS_BASE_URL).
+STT, LLM and TTS all go through the same server, so one key (LLM_API_KEY) is used.
 """
+
+from pipecat.services.openai.llm import OpenAILLMService
+from pipecat.services.openai.stt import OpenAISTTService
+from pipecat.services.openai.tts import OpenAITTSService
+
+from app.core.config import Settings
+
+
+def create_stt(s: Settings) -> OpenAISTTService:
+    return OpenAISTTService(
+        api_key=s.llm_api_key.get_secret_value(),
+        base_url=s.stt_base_url,
+        settings=OpenAISTTService.Settings(model="whisper-1"),
+    )
+
+
+def create_llm(s: Settings) -> OpenAILLMService:
+    return OpenAILLMService(
+        api_key=s.llm_api_key.get_secret_value(),
+        base_url=s.llm_base_url,
+        settings=OpenAILLMService.Settings(
+            model=s.llm_model, temperature=0.6, max_tokens=s.llm_max_tokens
+        ),
+    )
+
+
+def create_tts(s: Settings) -> OpenAITTSService:
+    # The server ignores the OpenAI voice name and uses its own Piper voice.
+    return OpenAITTSService(
+        api_key=s.llm_api_key.get_secret_value(),
+        base_url=s.tts_base_url,
+        settings=OpenAITTSService.Settings(model="tts-1", voice="alloy"),
+    )
