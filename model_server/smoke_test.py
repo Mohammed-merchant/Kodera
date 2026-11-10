@@ -22,6 +22,7 @@ from common import API_KEY, env
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="localhost")
+    ap.add_argument("--base", help="one URL for all three services, e.g. the ngrok URL")
     ap.add_argument("--key", default=API_KEY)
     ap.add_argument("--llm-port", default=env("LLM_PORT", "8001"))
     ap.add_argument("--stt-port", default=env("STT_PORT", "8002"))
@@ -35,7 +36,9 @@ def main() -> int:
     llm = f"http://{a.host}:{a.llm_port}"
     stt = f"http://{a.host}:{a.stt_port}"
     tts = f"http://{a.host}:{a.tts_port}"
-    h = {"Authorization": f"Bearer {a.key}"}
+    if a.base:
+        llm = stt = tts = a.base.rstrip("/")
+    h = {"Authorization": f"Bearer {a.key}", "ngrok-skip-browser-warning": "1"}
     c = httpx.Client(timeout=120, headers=h)
     failed = 0
 
@@ -72,7 +75,7 @@ def main() -> int:
         return r.json()["text"]
 
     def health(url: str):
-        d = httpx.get(f"{url}/health", timeout=10).json()
+        d = httpx.get(f"{url}/health", timeout=10, headers=h).json()
         gpu = d.get("gpu")
         return f"gpu={gpu['name']} {gpu['memory_used_mb']}/{gpu['memory_total_mb']} MB" if gpu else ""
 

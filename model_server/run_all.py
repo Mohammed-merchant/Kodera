@@ -3,6 +3,7 @@
     LLM  -> llama.cpp `llama-server` (Qwen GGUF)   port 8001   /v1/chat/completions
     STT  -> stt_server.py (faster-whisper)         port 8002   /v1/audio/transcriptions
     TTS  -> tts_server.py (Piper)                  port 8003   /v1/audio/speech
+    gateway.py                                     port 8000   all of the above on ONE port (for ngrok)
 
     python run_all.py            # all three
     python run_all.py stt tts    # only some (e.g. when the LLM runs under Ollama instead)
@@ -18,7 +19,7 @@ from pathlib import Path
 
 from common import HERE, env
 
-HOST = env("BIND_HOST", "0.0.0.0")
+HOST = env("BIND_HOST", "127.0.0.1")  # ngrok/gateway reach it locally
 KEY = env("MODEL_SERVER_API_KEY")
 
 
@@ -48,20 +49,21 @@ def uvicorn_cmd(module: str, port: str) -> list[str]:
 def main() -> None:
     if not KEY:
         sys.exit("Set MODEL_SERVER_API_KEY in model_server/.env first (the servers refuse to run open).")
-    want = set(sys.argv[1:]) or {"llm", "stt", "tts"}
+    want = set(sys.argv[1:]) or {"llm", "stt", "tts", "gateway"}
     plan = {
         "llm": lambda: llm_cmd(),
         "stt": lambda: uvicorn_cmd("stt_server", env("STT_PORT", "8002")),
         "tts": lambda: uvicorn_cmd("tts_server", env("TTS_PORT", "8003")),
+        "gateway": lambda: uvicorn_cmd("gateway", env("GATEWAY_PORT", "8000")),
     }
     unknown = want - plan.keys()
     if unknown:
-        sys.exit(f"unknown service(s): {', '.join(sorted(unknown))}; choose from llm stt tts")
+        sys.exit(f"unknown service(s): {', '.join(sorted(unknown))}; choose from llm stt tts gateway")
 
     procs: dict[str, subprocess.Popen] = {}
     try:
         # LLM first so its VRAM is reserved before Whisper loads.
-        for name in ("llm", "stt", "tts"):
+        for name in ("llm", "stt", "tts", "gateway"):
             if name in want:
                 cmd = plan[name]()
                 print(f"[run_all] starting {name}: {' '.join(c for c in cmd if c != KEY)}")
