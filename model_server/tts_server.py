@@ -31,7 +31,8 @@ log = logging.getLogger("tts")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 DEFAULT_VOICE = env("PIPER_VOICE", "en_US-lessac-medium")
-VOICE_DIR = Path(env("PIPER_VOICE_DIR", str(HERE / "models" / "piper")))
+_dir = Path(env("PIPER_VOICE_DIR", "models/piper"))
+VOICE_DIR = _dir if _dir.is_absolute() else HERE / _dir  # relative paths are from this folder
 PCM_RATE = 24_000
 _VOICE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")  # blocks path traversal
 
@@ -57,6 +58,12 @@ def get_voice(name: str):
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     if env("PRELOAD", "true").lower() == "true":
+        path = VOICE_DIR / f"{DEFAULT_VOICE}.onnx"
+        if not path.is_file():
+            raise RuntimeError(
+                f"Piper voice file not found: {path}\n"
+                "Download it with:  python download_models.py voice"
+            )
         await run_in_threadpool(get_voice, DEFAULT_VOICE)
     yield
 

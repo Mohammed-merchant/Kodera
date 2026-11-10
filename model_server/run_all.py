@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from common import HERE, env
 
@@ -29,7 +30,10 @@ def llm_cmd() -> list[str]:
     gguf = env("LLM_GGUF")
     if not gguf:
         sys.exit("LLM_GGUF is not set (path to the Qwen .gguf file) in model_server/.env")
-    cmd = [exe, "-m", gguf, "--host", HOST, "--port", env("LLM_PORT", "8001"),
+    gguf_path = Path(gguf) if Path(gguf).is_absolute() else HERE / gguf
+    if not gguf_path.is_file():
+        sys.exit(f"Model file not found: {gguf_path}\nDownload it with: python download_models.py llm")
+    cmd = [exe, "-m", str(gguf_path), "--host", HOST, "--port", env("LLM_PORT", "8001"),
            "-ngl", env("LLM_GPU_LAYERS", "99"), "-c", env("LLM_CTX", "2048"),
            "--alias", env("LLM_ALIAS", "qwen"), "--jinja"]
     if KEY:
