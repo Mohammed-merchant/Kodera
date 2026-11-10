@@ -51,7 +51,8 @@ def main() -> int:
             return detail
         except Exception as exc:
             failed += 1
-            print(f"[FAIL] {name}: {type(exc).__name__}: {exc}")
+            detail = exc.response.text[:300] if isinstance(exc, httpx.HTTPStatusError) else exc
+            print(f"[FAIL] {name}: {type(exc).__name__}: {detail}")
             return None
 
     def chat(text: str) -> str:

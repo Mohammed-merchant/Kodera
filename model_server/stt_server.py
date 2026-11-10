@@ -17,7 +17,9 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
 from starlette.concurrency import run_in_threadpool
 
-from common import AudioError, decode_audio, env, gpu_info, require_key
+from common import AudioError, add_cuda_dll_dirs, decode_audio, env, gpu_info, require_key
+
+add_cuda_dll_dirs()  # before faster-whisper loads its CUDA libraries
 
 log = logging.getLogger("stt")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")

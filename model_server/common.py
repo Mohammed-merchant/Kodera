@@ -51,6 +51,22 @@ def require_key(authorization: str | None = Header(default=None)) -> None:
         raise HTTPException(401, "invalid API key")
 
 
+def add_cuda_dll_dirs() -> None:
+    """Windows: make the CUDA DLLs installed by `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`
+    findable. Without this, loading Whisper works but transcribing fails with
+    "Library cublas64_12.dll is not found". Harmless elsewhere."""
+    if os.name != "nt":
+        return
+    import glob
+    import importlib.util
+
+    spec = importlib.util.find_spec("nvidia")
+    for root in list(spec.submodule_search_locations or []) if spec else []:
+        for folder in glob.glob(os.path.join(root, "*", "bin")):
+            os.add_dll_directory(folder)
+            os.environ["PATH"] = folder + os.pathsep + os.environ.get("PATH", "")
+
+
 def gpu_info() -> dict | None:
     try:
         out = subprocess.run(
