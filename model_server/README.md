@@ -30,7 +30,7 @@ cp .env.example .env                                # then edit it: set MODEL_SE
 
 1. **NVIDIA driver and CUDA**: faster-whisper needs CUDA 12 cuBLAS/cuDNN (`pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`). RTX 50-series (Blackwell) needs CUDA 12.8+ and CTranslate2 4.6+.
 2. **LLM**: install [llama.cpp](https://github.com/ggml-org/llama.cpp/releases) (the CUDA build, which provides `llama-server`) and put it on `PATH`. Download a Qwen GGUF into `model_server/models/` (for example `Qwen2.5-3B-Instruct-Q4_K_M.gguf` from the `Qwen/Qwen2.5-3B-Instruct-GGUF` repo on Hugging Face) and set `LLM_GGUF` in `.env`.
-3. **TTS voice**: put a Piper voice (`.onnx` and `.onnx.json`) in `model_server/models/piper/`, from https://huggingface.co/rhasspy/piper-voices.
+3. **Model files**: run `python download_models.py` (Piper voice into `models/piper/`, Qwen GGUF into `models/`, sizes from `.env`). Or `python download_models.py voice` / `llm` for one of them.
 4. **Whisper** downloads itself on first start (to the Hugging Face cache).
 
 ## Run
