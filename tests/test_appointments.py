@@ -65,6 +65,11 @@ def test_parse_day_words() -> None:
     assert appts.parse_day("Tomorrow", SCHED) == today + timedelta(days=1)
     assert appts.parse_day("2030-01-05", SCHED) == date(2030, 1, 5)
     assert appts.parse_day("next week", SCHED) is None
+    assert appts.parse_day("2030-01-05T10:00:00", SCHED) == date(2030, 1, 5)
+    thursday = appts.parse_day("Thursday", SCHED)
+    assert thursday and thursday.weekday() == 3 and thursday >= today
+    clock = appts.parse_clock("10:00:00")
+    assert clock and (clock.hour, clock.minute) == (10, 0)
 
 
 async def book(factory: Factory, slot: datetime, name: str = "Asha Rao", phone: str = "9876543210"):
@@ -170,3 +175,10 @@ async def test_a_broken_tool_tells_the_agent_not_to_promise(session_factory: Fac
     tools = build_tools(SETTINGS, BrokenFactory(), caller_number="9876543210", call_sid="CA1")  # type: ignore[arg-type]
     result = await call(tools, "check_available_slots", date="tomorrow")
     assert not result["ok"] and "do not promise" in result["message"]
+
+
+async def test_extra_arguments_from_the_model_are_ignored(session_factory: Factory) -> None:
+    tools = build_tools(SETTINGS, session_factory, caller_number="9876543210", call_sid="CA1")
+    day = next_open_day().isoformat()
+    result = await call(tools, "check_available_slots", date=day, time="10:00", extra="x")
+    assert result["ok"]

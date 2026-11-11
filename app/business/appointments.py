@@ -16,7 +16,7 @@ from app.core.config import Settings
 from app.db.models import Appointment
 
 MIN_LEAD_MINUTES = 15  # a slot must start at least this far ahead
-_CLOCK = re.compile(r"^\s*(\d{1,2})(?:[:.](\d{2}))?\s*([ap]\.?m\.?)?\s*$", re.IGNORECASE)
+_CLOCK = re.compile(r"^\s*(\d{1,2})(?:[:.](\d{2}))?(?::\d{2})?\s*([ap]\.?m\.?)?\s*$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -53,16 +53,21 @@ def schedule_from_settings(s: Settings) -> Schedule:
 # ---------- reading what the caller said ----------
 
 
+_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+
 def parse_day(text: str, sched: Schedule) -> date | None:
-    """'today', 'tomorrow' or YYYY-MM-DD."""
+    """'today', 'tomorrow', a weekday name, or YYYY-MM-DD (a trailing time is ignored)."""
     word = text.strip().lower()
     today = sched.now().date()
     if word == "today":
         return today
     if word == "tomorrow":
         return today + timedelta(days=1)
+    if word in _WEEKDAYS:  # the next such day, counting today
+        return today + timedelta(days=(_WEEKDAYS.index(word) - today.weekday()) % 7)
     try:
-        return date.fromisoformat(word)
+        return date.fromisoformat(word[:10])
     except ValueError:
         return None
 

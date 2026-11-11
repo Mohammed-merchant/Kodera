@@ -5,6 +5,7 @@ The agent must only confirm a booking after the tool returned ok=True.
 """
 
 import functools
+import inspect
 from datetime import datetime
 from typing import Any
 
@@ -39,10 +40,16 @@ def build_tools(
     def guarded(fn: Any) -> Any:
         """If a tool breaks (database down...), tell the agent so it never invents an answer."""
 
+        allowed = set(inspect.signature(fn).parameters)
+
         @functools.wraps(fn)
         async def wrapper(params: FunctionCallParams, *args: Any, **kwargs: Any) -> None:
             try:
-                await fn(params, *args, **kwargs)
+                # Small models sometimes add arguments the tool does not have; ignore them.
+                extra = set(kwargs) - allowed
+                if extra:
+                    log.warning("tool_extra_arguments", tool=fn.__name__, ignored=sorted(extra))
+                await fn(params, *args, **{k: v for k, v in kwargs.items() if k in allowed})
             except Exception:
                 log.exception("appointment_tool_failed", tool=fn.__name__, call_sid=call_sid)
                 await params.result_callback(
