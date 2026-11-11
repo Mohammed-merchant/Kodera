@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Clinic Dashboard</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #0f172a; --muted: #64748b; --line: #e6e8ec;
+    --accent: #0f766e; --accent-soft: #e6f4f1;
+    --good: #15803d; --good-soft: #e7f5ec; --warn: #b45309; --warn-soft: #fdf1e0;
+    --bad: #b91c1c; --bad-soft: #fbeaea; --neutral-soft: #eef0f3;
+    --radius: 14px; --shadow: 0 1px 2px rgba(15, 23, 42, .05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b0f14; --card: #121923; --text: #e6edf3; --muted: #8b98a9; --line: #1f2a37;
+      --accent: #2dd4bf; --accent-soft: #10302e;
+      --good: #4ade80; --good-soft: #12301f; --warn: #fbbf24; --warn-soft: #33260c;
+      --bad: #f87171; --bad-soft: #3a1414; --neutral-soft: #1b2430;
+      --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text); line-height: 1.45;
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 20px 16px 48px; }
+  .num { font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); }
+  button { font: inherit; cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+
+  /* top bar */
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+  .brand { font-size: 17px; font-weight: 650; letter-spacing: -.01em; }
+  .brand span { color: var(--muted); font-weight: 500; }
+  .tools { display: flex; align-items: center; gap: 14px; font-size: 13px; color: var(--muted); }
+  .live { display: inline-flex; align-items: center; gap: 7px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); flex: none; }
+  .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); } .dot.off { background: var(--muted); }
+  .dot.pulse { animation: pulse 1s ease-out 1; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(21, 128, 61, .5); } 100% { box-shadow: 0 0 0 8px rgba(21, 128, 61, 0); } }
+  @media (prefers-reduced-motion: reduce) { .dot.pulse { animation: none; } }
+  .linkbtn { background: none; border: 0; color: var(--muted); padding: 4px 6px; border-radius: 6px; }
+  .linkbtn:hover { color: var(--text); background: var(--neutral-soft); }
+
+  /* cards */
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+  .card h2 { margin: 0; font-size: 14px; font-weight: 600; }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .kpi { padding: 14px 16px; }
+  .kpi .label { font-size: 12.5px; color: var(--muted); }
+  .kpi .value { font-size: 28px; font-weight: 650; letter-spacing: -.02em; margin-top: 2px; }
+  .kpi .sub { font-size: 12px; color: var(--muted); }
+  .grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
+  @media (min-width: 920px) { .grid { grid-template-columns: 1.7fr 1fr; } }
+  .section { margin-top: 16px; }
+
+  /* tabs */
+  .tabs { display: inline-flex; background: var(--neutral-soft); border-radius: 10px; padding: 3px; gap: 2px; }
+  .tab { border: 0; background: transparent; color: var(--muted); padding: 5px 12px; border-radius: 8px; font-size: 13px; }
+  .tab[aria-selected="true"] { background: var(--card); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .12); font-weight: 600; }
+
+  /* lists & tables */
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 12px; font-weight: 500; color: var(--muted); padding: 8px 16px; border-bottom: 1px solid var(--line); }
+  td { padding: 11px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  .when { white-space: nowrap; font-weight: 550; }
+  .sub { display: block; font-size: 12.5px; color: var(--muted); font-weight: 400; }
+  .scroll { max-height: 520px; overflow: auto; }
+  .chip { display: inline-block; font-size: 12px; padding: 2px 9px; border-radius: 99px; background: var(--neutral-soft); color: var(--muted); white-space: nowrap; }
+  .chip.good { background: var(--good-soft); color: var(--good); }
+  .chip.bad { background: var(--bad-soft); color: var(--bad); }
+  .chip.accent { background: var(--accent-soft); color: var(--accent); }
+  .calls { list-style: none; margin: 0; padding: 0; }
+  .calls li { display: flex; justify-content: space-between; gap: 10px; padding: 11px 16px; border-bottom: 1px solid var(--line); }
+  .calls li:last-child { border-bottom: 0; }
+  .calls .right { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+  .empty { padding: 36px 16px; text-align: center; color: var(--muted); }
+  @media (max-width: 640px) { .hide-sm { display: none; } th, td { padding-left: 12px; padding-right: 12px; } }
+
+  /* performance */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; padding: 16px; }
+  .tile { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+  .tile .top { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); }
+  .tile .big { font-size: 22px; font-weight: 650; margin: 2px 0; }
+  .tile .hint { font-size: 12px; color: var(--muted); }
+  .perf-cols { display: grid; gap: 16px; padding: 0 16px 16px; grid-template-columns: 1fr; }
+  @media (min-width: 760px) { .perf-cols { grid-template-columns: 1.2fr 1fr; } }
+  .perf-cols h3 { margin: 0 0 8px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+  .bars { display: grid; gap: 7px; }
+  .bar { display: grid; grid-template-columns: 215px 1fr 54px; align-items: center; gap: 10px; font-size: 12.5px; }
+  .bar .track { height: 6px; border-radius: 4px; background: var(--neutral-soft); overflow: hidden; }
+  .bar .fill { height: 100%; background: var(--accent); border-radius: 4px; }
+  .bar .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar .ms { text-align: right; }
+  @media (max-width: 520px) { .bar { grid-template-columns: 1fr 54px; } .bar .track { grid-column: 1 / -1; order: 3; } }
+  .mini td, .mini th { padding: 6px 0; font-size: 12.5px; } .mini th { padding-top: 0; }
+  .mini td:not(:first-child), .mini th:not(:first-child) { text-align: right; }
+  .foot { padding: 0 16px 14px; font-size: 12.5px; color: var(--muted); }
+
+  .banner { background: var(--bad-soft); color: var(--bad); border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; display: flex; justify-content: space-between; gap: 10px; }
+  .banner button { color: inherit; text-decoration: underline; background: none; border: 0; }
+
+  /* login */
+  .login { min-height: 100vh; display: grid; place-items: center; padding: 16px; }
+  .login form { width: min(360px, 100%); padding: 28px; }
+  .login h1 { margin: 0 0 4px; font-size: 20px; letter-spacing: -.01em; }
+  .login p { margin: 0 0 18px; color: var(--muted); font-size: 14px; }
+  label { display: block; font-size: 13px; margin-bottom: 6px; font-weight: 550; }
+  input[type=password] { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; }
+  .primary { width: 100%; margin-top: 14px; padding: 10px; border: 0; border-radius: 10px; background: var(--accent); color: #fff; font-weight: 600; }
+  @media (prefers-color-scheme: dark) { .primary { color: #04201d; } }
+  .primary:disabled { opacity: .6; cursor: default; }
+  .error { color: var(--bad); font-size: 13px; margin-top: 10px; min-height: 1.2em; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<div id="login" class="login" hidden>
+  <form class="card" id="login-form">
+    <h1>Clinic dashboard</h1>
+    <p>Sign in to see bookings and calls.</p>
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password" required>
+    <button class="primary" id="login-btn" type="submit">Sign in</button>
+    <div class="error" id="login-error" role="alert"></div>
+  </form>
+</div>
+
+<div id="app" class="wrap" hidden>
+  <header>
+    <div class="brand" id="brand">Clinic <span>dashboard</span></div>
+    <div class="tools">
+      <span class="live" aria-live="polite"><span class="dot off" id="live-dot"></span><span id="updated">Loading…</span></span>
+      <button class="linkbtn" id="refresh" type="button">Refresh</button>
+      <button class="linkbtn" id="logout" type="button">Sign out</button>
+    </div>
+  </header>
+
+  <div id="error" class="banner" role="alert" hidden><span id="error-text"></span><button id="retry" type="button">Retry</button></div>
+
+  <section class="kpis" id="kpis" aria-label="Summary"></section>
+
+  <div class="grid">
+    <section class="card" aria-labelledby="appt-title">
+      <div class="card-head">
+        <h2 id="appt-title">Appointments</h2>
+        <div class="tabs" role="tablist" id="tabs"></div>
+      </div>
+      <div class="scroll" id="appointments"></div>
+    </section>
+
+    <section class="card" aria-labelledby="calls-title">
+      <div class="card-head"><h2 id="calls-title">Recent calls</h2><span class="muted" style="font-size:12.5px">numbers hidden</span></div>
+      <div class="scroll" id="calls"></div>
+    </section>
+  </div>
+
+  <section class="card section" aria-labelledby="perf-title">
+    <div class="card-head"><h2 id="perf-title">System and database performance</h2><span class="muted" style="font-size:12.5px">measured live on each refresh</span></div>
+    <div class="tiles" id="tiles"></div>
+    <div class="perf-cols">
+      <div><h3>Query timings</h3><div class="bars" id="bars"></div></div>
+      <div><h3>Tables</h3><div id="tables"></div></div>
+    </div>
+    <div class="foot" id="foot"></div>
+  </section>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const REFRESH_MS = 15000;
+let data = null, tab = "upcoming", lastOk = 0, timer = null;
+
+/* Build elements with textContent only, so caller-supplied text (names, reasons) can never inject markup. */
+function h(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined && text !== null) e.textContent = text;
+  return e;
+}
+function put(parent, ...kids) { parent.replaceChildren(...kids); }
+
+const fmtBytes = (n) => n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(0) + " KB" : (n / 1048576).toFixed(1) + " MB";
+const fmtDur = (s) => s == null ? "–" : s < 60 ? s + "s" : Math.floor(s / 60) + "m " + (s % 60) + "s";
+const level = (ms, good, ok) => ms == null ? "off" : ms <= good ? "" : ms <= ok ? "warn" : "bad";
+
+async function api(path, options) {
+  const res = await fetch("/dashboard/api/" + path, { credentials: "same-origin", ...options });
+  if (res.status === 401) { showLogin(); throw new Error("signed-out"); }
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "Request failed (" + res.status + ")");
+  return res.json();
+}
+
+/* ---------- views ---------- */
+function showLogin() {
+  clearInterval(timer);
+  $("app").hidden = true; $("login").hidden = false; $("password").focus();
+}
+function showApp() { $("login").hidden = true; $("app").hidden = false; }
+
+function renderKpis(k) {
+  const items = [
+    ["Today's appointments", k.appointments_today, "booked for today"],
+    ["Upcoming", k.appointments_upcoming, "from now on"],
+    ["Calls today", k.calls_today, k.calls_total + " in total"],
+    ["Average call", fmtDur(k.avg_call_seconds), "finished calls"],
+    ["Booking rate", k.booking_rate_percent == null ? "–" : k.booking_rate_percent + "%", k.bookings_7d + " bookings from " + k.calls_7d + " calls, 7 days"],
+  ];
+  put($("kpis"), ...items.map(([label, value, sub]) => {
+    const c = h("div", "card kpi");
+    c.append(h("div", "label", label), h("div", "value num", value), h("div", "sub", sub));
+    return c;
+  }));
+}
+
+function renderTabs() {
+  const counts = { upcoming: data.appointments.upcoming.length, past: data.appointments.past.length, cancelled: data.appointments.cancelled.length };
+  const names = { upcoming: "Upcoming", past: "Past", cancelled: "Cancelled" };
+  put($("tabs"), ...Object.keys(names).map((key) => {
+    const b = h("button", "tab", names[key] + " " + counts[key]);
+    b.type = "button"; b.setAttribute("role", "tab"); b.setAttribute("aria-selected", String(tab === key));
+    b.onclick = () => { tab = key; renderTabs(); renderAppointments(); };
+    return b;
+  }));
+}
+
+function renderAppointments() {
+  const rows = data.appointments[tab];
+  if (!rows.length) {
+    const msg = { upcoming: "No upcoming appointments yet.", past: "No past appointments.", cancelled: "Nothing cancelled." }[tab];
+    return put($("appointments"), h("div", "empty", msg));
+  }
+  const table = h("table"), head = h("tr");
+  ["When", "Patient", "Phone", "Status"].forEach((t, i) => { const th = h("th", i === 2 ? "hide-sm" : "", t); head.append(th); });
+  const thead = h("thead"); thead.append(head); table.append(thead);
+  const body = h("tbody");
+  rows.forEach((a) => {
+    const tr = h("tr");
+    const when = h("td", "when num", a.date); when.append(h("span", "sub", a.time));
+    const who = h("td", "", a.patient); who.append(h("span", "sub", a.reason || "No reason given"));
+    const phone = h("td", "hide-sm num", a.phone);
+    const status = h("td"); status.append(h("span", "chip " + (a.status === "cancelled" ? "bad" : tab === "past" ? "" : "good"), a.status === "cancelled" ? "Cancelled" : tab === "past" ? "Done" : "Booked"));
+    if (a.by_phone_agent) { status.append(" ", h("span", "chip accent", "AI call")); }
+    tr.append(when, who, phone, status); body.append(tr);
+  });
+  table.append(body); put($("appointments"), table);
+}
+
+function renderCalls() {
+  if (!data.calls.length) return put($("calls"), h("div", "empty", "No calls yet."));
+  const ul = h("ul", "calls");
+  data.calls.forEach((c) => {
+    const li = h("li"), left = h("div", "num", c.date + ", " + c.time);
+    left.append(h("span", "sub", c.from + "  ·  " + fmtDur(c.duration_seconds)));
+    const right = h("div", "right");
+    right.append(h("span", "chip" + (c.status === "completed" ? " good" : ""), c.status));
+    if (c.booked) right.append(h("span", "chip accent", "Booked"));
+    li.append(left, right); ul.append(li);
+  });
+  put($("calls"), ul);
+}
+
+function tile(title, value, unit, hint, lvl) {
+  const t = h("div", "tile"), top = h("div", "top");
+  top.append(h("span", "dot " + lvl), h("span", "", title));
+  const big = h("div", "big num", value == null ? "–" : value); if (unit && value != null) big.append(h("span", "muted", " " + unit));
+  t.append(top, big, h("div", "hint", hint)); return t;
+}
+
+function renderPerformance() {
+  const p = data.performance, pg = p.postgres, r = p.redis;
+  put($("tiles"),
+    tile("Postgres response", p.postgres_ping_ms, "ms", "Simple query, median of 5", level(p.postgres_ping_ms, 10, 50)),
+    tile("Booking slot lookup", p.slot_lookup_ms, "ms", "The caller waits for this", level(p.slot_lookup_ms, 40, 120)),
+    tile("Redis response", r ? r.ping_ms : null, "ms", r ? "Redis " + r.version + " · " + r.keys + " keys" : "Redis not reachable", r ? level(r.ping_ms, 5, 25) : "bad"),
+    tile("Postgres cache hits", pg && pg.cache_hit_percent != null ? pg.cache_hit_percent : null, "%", "Reads served from memory", pg && pg.cache_hit_percent != null ? (pg.cache_hit_percent >= 95 ? "" : pg.cache_hit_percent >= 85 ? "warn" : "bad") : "off"));
+
+  const entries = Object.entries(p.query_ms).sort((a, b) => b[1] - a[1]), max = Math.max(1, ...entries.map((e) => e[1]));
+  put($("bars"), ...entries.map(([name, ms]) => {
+    const row = h("div", "bar"), track = h("div", "track"), fill = h("div", "fill");
+    fill.style.width = Math.max(2, (ms / max) * 100) + "%"; track.append(fill);
+    row.append(h("span", "name", name), track, h("span", "ms num", ms + " ms")); return row;
+  }));
+
+  if (pg && pg.tables.length) {
+    const t = h("table", "mini"), head = h("tr");
+    ["Table", "Rows", "Size"].forEach((x) => head.append(h("th", "", x)));
+    const th = h("thead"); th.append(head); t.append(th);
+    const b = h("tbody");
+    pg.tables.forEach((x) => { const tr = h("tr"); tr.append(h("td", "", x.name), h("td", "num", x.rows), h("td", "num", fmtBytes(x.bytes))); b.append(tr); });
+    t.append(b); put($("tables"), t);
+  } else put($("tables"), h("div", "muted", "No table statistics."));
+
+  const foot = [];
+  if (pg) foot.push("PostgreSQL " + pg.version + " · database " + fmtBytes(pg.size_bytes) + " · " + pg.connections + " connections");
+  if (r) foot.push("Redis memory " + r.memory);
+  $("foot").textContent = foot.join("   |   ");
+}
+
+function renderAll() {
+  $("brand").replaceChildren(document.createTextNode(data.clinic + " "), h("span", "", "dashboard"));
+  document.title = data.clinic + " · Dashboard";
+  renderKpis(data.kpis); renderTabs(); renderAppointments(); renderCalls(); renderPerformance();
+}
+
+/* ---------- loading ---------- */
+async function load() {
+  try {
+    data = await api("overview");
+    showApp(); renderAll();
+    $("error").hidden = true; lastOk = Date.now();
+    const d = $("live-dot"); d.className = "dot"; void d.offsetWidth; d.classList.add("pulse");
+    tick();
+  } catch (e) {
+    if (e.message === "signed-out") return;
+    $("error-text").textContent = "Could not refresh: " + e.message; $("error").hidden = false;
+    $("live-dot").className = "dot bad";
+  }
+}
+function tick() {
+  if (!lastOk) return;
+  const s = Math.round((Date.now() - lastOk) / 1000);
+  $("updated").textContent = "Updated " + (s < 5 ? "just now" : s + "s ago");
+}
+function start() {
+  clearInterval(timer);
+  timer = setInterval(() => { tick(); if (document.visibilityState === "visible" && Date.now() - lastOk >= REFRESH_MS) load(); }, 1000);
+  load();
+}
+
+$("refresh").onclick = load; $("retry").onclick = load;
+$("logout").onclick = async () => { await fetch("/dashboard/api/logout", { method: "POST", credentials: "same-origin" }); data = null; lastOk = 0; showLogin(); };
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && $("login").hidden) load(); });
+
+$("login-form").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const btn = $("login-btn"), err = $("login-error");
+  btn.disabled = true; err.textContent = "";
+  try {
+    const res = await fetch("/dashboard/api/login", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: $("password").value }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "Sign in failed");
+    $("password").value = ""; start();
+  } catch (e) { err.textContent = e.message; $("password").select(); }
+  finally { btn.disabled = false; }
+};
+
+start();
+</script>
+</body>
+</html>

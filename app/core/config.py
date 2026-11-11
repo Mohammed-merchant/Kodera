@@ -53,6 +53,10 @@ class Settings(BaseSettings):
 
     gateway_api_key: SecretStr = SecretStr("")
 
+    # Staff dashboard at /dashboard. Empty password = the dashboard is switched off (404).
+    dashboard_password: SecretStr = SecretStr("")
+    dashboard_session_hours: int = 12
+
     # Voice agent. False = old echo test (caller hears their own voice).
     voice_agent_enabled: bool = True
     agent_name: str = "Kodera"

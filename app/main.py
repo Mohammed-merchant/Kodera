@@ -9,7 +9,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app import __version__
-from app.api.routes import exotel, health, webhooks
+from app.api.routes import dashboard, exotel, health, webhooks
 from app.api.ws import exotel_media, media
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
@@ -56,4 +56,5 @@ app.include_router(health.router)
 app.include_router(webhooks.router)
 app.include_router(media.router)
 app.include_router(exotel.router)
+app.include_router(dashboard.router)
 app.include_router(exotel_media.router)
