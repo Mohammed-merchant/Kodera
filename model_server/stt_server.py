@@ -28,7 +28,9 @@ MODEL = env("WHISPER_MODEL", "small")
 DEVICE = env("WHISPER_DEVICE", "cuda")
 COMPUTE = env("WHISPER_COMPUTE_TYPE", "int8_float16")
 DEFAULT_LANG = env("WHISPER_LANGUAGE") or None  # None = auto-detect
-BEAM = int(env("WHISPER_BEAM_SIZE", "1"))
+BEAM = int(env("WHISPER_BEAM_SIZE", "3"))
+# Hint about the topic of the calls. Helps with names, times and dates. A request can override it.
+DEFAULT_PROMPT = env("WHISPER_PROMPT") or None
 MAX_MB = int(env("MAX_UPLOAD_MB", "25"))
 
 _model = None
@@ -58,11 +60,19 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="STT server", lifespan=lifespan)
 
 
-def _transcribe(audio, language):
+def _transcribe(audio, language, prompt):
     model = get_model()
     with _lock:  # one GPU inference at a time
-        segments, info = model.transcribe(audio, language=language or DEFAULT_LANG,
-                                          beam_size=BEAM, vad_filter=True)
+        segments, info = model.transcribe(
+            audio,
+            language=language or DEFAULT_LANG,
+            beam_size=BEAM,
+            initial_prompt=prompt or DEFAULT_PROMPT,
+            temperature=0.0,  # no random retries: same audio, same text
+            condition_on_previous_text=False,
+            without_timestamps=True,  # we do not need them, and decoding is faster
+            vad_filter=True,
+        )
         return " ".join(s.text.strip() for s in segments).strip(), info
 
 
@@ -78,6 +88,7 @@ async def transcriptions(
     model: str = Form(default=""),  # accepted for OpenAI compatibility, ignored
     language: str | None = Form(default=None),
     response_format: str = Form(default="json"),
+    prompt: str | None = Form(default=None),
 ):
     data = await file.read(MAX_MB * 1024 * 1024 + 1)
     if len(data) > MAX_MB * 1024 * 1024:
@@ -89,7 +100,7 @@ async def transcriptions(
 
     t0 = time.perf_counter()
     try:
-        text, info = await run_in_threadpool(_transcribe, audio, language)
+        text, info = await run_in_threadpool(_transcribe, audio, language, prompt)
     except Exception as exc:
         log.exception("transcription failed")
         raise HTTPException(500, f"{type(exc).__name__}: {exc}") from exc

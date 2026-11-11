@@ -78,6 +78,10 @@ async def run_call(
         FastAPIWebsocketParams,
         FastAPIWebsocketTransport,
     )
+    from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
+        SpeechTimeoutUserTurnStopStrategy,
+    )
+    from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
     from app.pipeline.services import create_llm, create_stt, create_tts
     from app.pipeline.tools import build_tools
@@ -109,9 +113,17 @@ async def run_call(
     aggregators = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
-            # Default VAD settings: Pipecat's smart end-of-turn model decides when the
-            # caller has finished, so we do not add our own silence delay.
-            vad_analyzer=SileroVADAnalyzer()
+            vad_analyzer=SileroVADAnalyzer(),
+            # The default "smart turn" model sometimes held the answer back for 2-3 seconds
+            # after the caller had finished. A short fixed wait is faster and predictable:
+            # the turn ends once this wait AND the transcript are both in.
+            user_turn_strategies=UserTurnStrategies(
+                stop=[
+                    SpeechTimeoutUserTurnStopStrategy(
+                        user_speech_timeout=settings.agent_turn_wait_seconds
+                    )
+                ]
+            ),
         ),
     )
 

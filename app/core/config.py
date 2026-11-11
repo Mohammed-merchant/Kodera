@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     clinic_slot_minutes: int = 15
     # Minutes ahead of UTC for the clinic's clock (India = 330).
     clinic_utc_offset_minutes: int = 330
+    # After the caller pauses, how long to wait for them to continue before answering.
+    # Speech-to-text takes longer than this anyway, so a small value costs no extra delay.
+    agent_turn_wait_seconds: float = 0.25
     # Hang up if nobody speaks for this long.
     agent_idle_seconds: int = 45
 

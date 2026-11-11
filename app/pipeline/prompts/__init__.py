@@ -59,3 +59,15 @@ def build_system_prompt(settings: Settings, now: datetime) -> str:
 
 def build_greeting(settings: Settings) -> str:
     return settings.agent_greeting.format(name=settings.agent_name, clinic=settings.clinic_name)
+
+
+def build_stt_prompt(settings: Settings) -> str:
+    """Topic hint for Whisper. Without it, times and dates are often misheard
+    ("11:15 AM" became "15 a.m.")."""
+    return (
+        f"Phone call to {settings.clinic_name}, the clinic of {settings.clinic_doctor}. "
+        "The caller books, moves or cancels an appointment. "
+        "Times like 11:15 AM, 5:30 PM, 10 o'clock. "
+        "Dates like Thursday 12 November, tomorrow, next Monday. "
+        "Words: appointment, reschedule, cancel, consultation, fees, morning, evening."
+    )

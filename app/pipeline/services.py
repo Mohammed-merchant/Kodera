@@ -8,13 +8,14 @@ from pipecat.services.openai.stt import OpenAISTTService
 from pipecat.services.openai.tts import OpenAITTSService
 
 from app.core.config import Settings
+from app.pipeline.prompts import build_stt_prompt
 
 
 def create_stt(s: Settings) -> OpenAISTTService:
     return OpenAISTTService(
         api_key=s.llm_api_key.get_secret_value(),
         base_url=s.stt_base_url,
-        settings=OpenAISTTService.Settings(model="whisper-1"),
+        settings=OpenAISTTService.Settings(model="whisper-1", prompt=build_stt_prompt(s)),
     )
 
 
