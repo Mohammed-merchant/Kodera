@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -65,3 +65,31 @@ class TranscriptTurn(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     call: Mapped[Call] = relationship(back_populates="turns")
+
+
+class Appointment(Base):
+    """One booked consultation slot. The doctor sees one patient per slot."""
+
+    __tablename__ = "appointments"
+    __table_args__ = (
+        # Two patients can never hold the same slot (cancelled rows do not count).
+        Index(
+            "uq_appointments_booked_slot",
+            "slot_start",
+            unique=True,
+            postgresql_where=text("status = 'booked'"),
+            sqlite_where=text("status = 'booked'"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    patient_name: Mapped[str] = mapped_column(String(100))
+    phone: Mapped[str] = mapped_column(String(32), index=True)
+    reason: Mapped[str | None] = mapped_column(String(300))
+    slot_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="booked")  # booked | cancelled
+    booked_via_call: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )

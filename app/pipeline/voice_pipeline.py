@@ -13,7 +13,9 @@ from typing import Any
 import httpx
 import structlog
 from fastapi import WebSocket
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.business.appointments import schedule_from_settings
 from app.core.config import Settings
 from app.pipeline.prompts import build_greeting, build_system_prompt
 
@@ -47,7 +49,15 @@ def warm_up() -> None:
     SileroVADAnalyzer()
 
 
-async def run_call(ws: WebSocket, *, stream_sid: str, call_sid: str, settings: Settings) -> str:
+async def run_call(
+    ws: WebSocket,
+    *,
+    stream_sid: str,
+    call_sid: str,
+    caller_number: str,
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+) -> str:
     """Run the agent until the call ends. Returns a short reason for the call log."""
     if not await gpu_server_reachable(settings):
         log.error("gpu_server_unreachable", call_sid=call_sid, url=settings.llm_base_url)
@@ -70,6 +80,7 @@ async def run_call(ws: WebSocket, *, stream_sid: str, call_sid: str, settings: S
     )
 
     from app.pipeline.services import create_llm, create_stt, create_tts
+    from app.pipeline.tools import build_tools
 
     transport = FastAPIWebsocketTransport(
         ws,
@@ -81,7 +92,20 @@ async def run_call(ws: WebSocket, *, stream_sid: str, call_sid: str, settings: S
         ),
     )
 
-    context = LLMContext([{"role": "system", "content": build_system_prompt(settings.agent_name)}])
+    greeting = build_greeting(settings)
+    tools = build_tools(settings, session_factory, caller_number=caller_number, call_sid=call_sid)
+    # Pipecat does not put the spoken greeting into the chat history. Without this the model
+    # does not know it already greeted, and answers every "hello" with the greeting again.
+    context = LLMContext(
+        [
+            {
+                "role": "system",
+                "content": build_system_prompt(settings, schedule_from_settings(settings).now()),
+            },
+            {"role": "assistant", "content": greeting},
+        ],
+        tools=tools,
+    )
     aggregators = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
@@ -91,13 +115,15 @@ async def run_call(ws: WebSocket, *, stream_sid: str, call_sid: str, settings: S
         ),
     )
 
+    llm = create_llm(settings)
+    tts = create_tts(settings)
     pipeline = Pipeline(
         [
             transport.input(),
             create_stt(settings),
             aggregators.user(),
-            create_llm(settings),
-            create_tts(settings),
+            llm,
+            tts,
             transport.output(),
             aggregators.assistant(),
         ]
@@ -107,6 +133,7 @@ async def run_call(ws: WebSocket, *, stream_sid: str, call_sid: str, settings: S
         params=PipelineParams(
             audio_in_sample_rate=PIPELINE_INPUT_RATE,
             audio_out_sample_rate=PIPELINE_OUTPUT_RATE,
+            enable_metrics=True,  # logs time-to-first-byte of STT, LLM and TTS for every turn
         ),
         idle_timeout_secs=settings.agent_idle_seconds,
     )
@@ -116,8 +143,12 @@ async def run_call(ws: WebSocket, *, stream_sid: str, call_sid: str, settings: S
     @transport.event_handler("on_client_connected")  # type: ignore[untyped-decorator]
     async def _greet(_transport: Any, _client: Any) -> None:
         # A fixed greeting skips the LLM, so the caller hears something right away.
-        text = build_greeting(settings.agent_greeting, settings.agent_name)
-        await worker.queue_frames([TTSSpeakFrame(text)])
+        await worker.queue_frames([TTSSpeakFrame(greeting)])
+
+    @llm.event_handler("on_function_calls_started")  # type: ignore[untyped-decorator]
+    async def _filler(_service: Any, _calls: Any) -> None:
+        # Looking up slots takes a moment; fill the silence so the caller knows we heard.
+        await tts.queue_frame(TTSSpeakFrame("One moment, let me check."))
 
     @transport.event_handler("on_client_disconnected")  # type: ignore[untyped-decorator]
     async def _hangup(_transport: Any, _client: Any) -> None:

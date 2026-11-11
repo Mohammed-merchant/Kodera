@@ -56,7 +56,19 @@ class Settings(BaseSettings):
     # Voice agent. False = old echo test (caller hears their own voice).
     voice_agent_enabled: bool = True
     agent_name: str = "Kodera"
-    agent_greeting: str = "Hello, this is {name}. How can I help you today?"
+    agent_greeting: str = "Hello, thank you for calling {clinic}. How can I help you today?"
+    # --- Clinic (the agent is the clinic's phone receptionist). EDIT THESE in .env. ---
+    clinic_name: str = "City Care Clinic"
+    clinic_doctor: str = "Dr. Sharma"
+    clinic_address: str = "12 Main Road, near the bus stand"
+    clinic_fees: str = "500 rupees for a consultation"
+    # Weekdays the clinic is open: 0 = Monday ... 6 = Sunday.
+    clinic_open_days: str = "0,1,2,3,4,5"
+    # Consultation sessions, 24-hour HH:MM-HH:MM, comma separated.
+    clinic_sessions: str = "10:00-13:00,17:00-20:00"
+    clinic_slot_minutes: int = 15
+    # Minutes ahead of UTC for the clinic's clock (India = 330).
+    clinic_utc_offset_minutes: int = 330
     # Hang up if nobody speaks for this long.
     agent_idle_seconds: int = 45
 

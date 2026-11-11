@@ -62,6 +62,7 @@ async def exotel_media_stream(
     await ws.accept()
     call_sid = ""
     stream_sid = ""
+    caller_number = ""
     inbound_frames = 0
     sent_chunks = 0
     buffer = bytearray()
@@ -99,6 +100,7 @@ async def exotel_media_stream(
                         await _close_quietly(ws, POLICY_VIOLATION)
                         break
                     call_sid = sid
+                    caller_number = str(start.get("from", ""))
                     stream_sid = str(start.get("stream_sid") or message.get("stream_sid", ""))
                     log.info(
                         "exotel_stream_started",
@@ -110,7 +112,12 @@ async def exotel_media_stream(
                     if settings.voice_agent_enabled:
                         # Pipecat takes over the socket and runs until the call ends.
                         reason = await run_call(
-                            ws, stream_sid=stream_sid, call_sid=call_sid, settings=settings
+                            ws,
+                            stream_sid=stream_sid,
+                            call_sid=call_sid,
+                            caller_number=caller_number,
+                            session_factory=ws.app.state.session_factory,
+                            settings=settings,
                         )
                         await saving
                         await _close_quietly(ws)

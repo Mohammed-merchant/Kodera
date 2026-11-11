@@ -7,6 +7,7 @@ from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app.api.ws import exotel_media
+from app.business.appointments import schedule_from_settings
 from app.core.config import Settings, get_settings
 from app.main import app
 from app.pipeline import services
@@ -32,9 +33,17 @@ def agent_settings(**extra: Any) -> Settings:
     )
 
 
-def test_prompts_use_the_agent_name() -> None:
-    assert "Kodera" in build_system_prompt("Kodera")
-    assert build_greeting("Hi, this is {name}.", "Kodera") == "Hi, this is Kodera."
+def test_prompt_has_clinic_facts_and_safety_rules() -> None:
+    s = Settings(_env_file=None, clinic_name="Test Clinic", clinic_fees="300 rupees")
+    prompt = build_system_prompt(s, schedule_from_settings(s).now())
+    assert "Test Clinic" in prompt and "300 rupees" in prompt
+    assert "Never diagnose" in prompt and "108" in prompt
+    assert "THE GREETING IS ALREADY DONE" in prompt  # stops the repeated "hello" greeting
+
+
+def test_greeting_names_the_clinic() -> None:
+    s = Settings(_env_file=None, clinic_name="Test Clinic")
+    assert "Test Clinic" in build_greeting(s)
 
 
 def test_services_point_at_the_gpu_server() -> None:
