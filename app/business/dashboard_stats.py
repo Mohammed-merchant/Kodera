@@ -19,13 +19,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.business import appointments as appts
 from app.core.config import Settings
 from app.core.privacy import mask_number
-from app.db.models import Appointment, Call
+from app.db.models import Appointment, Call, CallEvent, TranscriptTurn
 
 UPCOMING_LIMIT = 100
 PAST_LIMIT = 50
 CANCELLED_LIMIT = 30
 CALLS_LIMIT = 25
 PING_RUNS = 5
+RESPONSE_SAMPLES = 200  # agent turns used for the response-time numbers
+RESPONSE_TARGET_MS = 650
 
 
 class Timings:
@@ -140,6 +142,101 @@ async def _redis_details(redis: Redis) -> dict[str, Any]:
     }
 
 
+async def _voice_numbers(session: AsyncSession) -> dict[str, Any]:
+    """How long callers wait for the agent, from the latest recorded agent turns."""
+    rows = (
+        await session.execute(
+            select(
+                TranscriptTurn.response_ms,
+                TranscriptTurn.stt_ms,
+                TranscriptTurn.llm_ms,
+                TranscriptTurn.tts_ms,
+            )
+            .where(TranscriptTurn.role == "agent", TranscriptTurn.response_ms.is_not(None))
+            .order_by(TranscriptTurn.id.desc())
+            .limit(RESPONSE_SAMPLES)
+        )
+    ).all()
+    if not rows:
+        return {"samples": 0, "target_ms": RESPONSE_TARGET_MS}
+    waits = sorted(int(r.response_ms) for r in rows)
+
+    def average(index: int) -> int | None:
+        values = [v for v in (r[index] for r in rows) if v is not None]
+        return round(sum(values) / len(values)) if values else None
+
+    return {
+        "samples": len(waits),
+        "target_ms": RESPONSE_TARGET_MS,
+        "p50_ms": waits[len(waits) // 2],
+        "p95_ms": waits[min(len(waits) - 1, int(len(waits) * 0.95))],
+        "avg_ms": round(sum(waits) / len(waits)),
+        "within_target_percent": round(
+            100 * sum(w <= RESPONSE_TARGET_MS for w in waits) / len(waits)
+        ),
+        "avg_stt_ms": average(1),
+        "avg_llm_ms": average(2),
+        "avg_tts_ms": average(3),
+    }
+
+
+async def call_detail(
+    factory: async_sessionmaker[AsyncSession], settings: Settings, call_id: int
+) -> dict[str, Any] | None:
+    """One call: the conversation with timings, what the agent did, and any booking."""
+    sched = appts.schedule_from_settings(settings)
+    async with factory() as session:
+        call = await session.get(Call, call_id)
+        if call is None:
+            return None
+        turns = (
+            await session.scalars(
+                select(TranscriptTurn)
+                .where(TranscriptTurn.call_id == call_id)
+                .order_by(TranscriptTurn.created_at, TranscriptTurn.id)
+            )
+        ).all()
+        events = (
+            await session.scalars(
+                select(CallEvent).where(CallEvent.call_id == call_id).order_by(CallEvent.id)
+            )
+        ).all()
+        booked = (
+            await session.scalars(
+                select(Appointment).where(Appointment.booked_via_call == call.provider_call_id)
+            )
+        ).all()
+    return {
+        "call": {
+            "id": call.id,
+            "from": mask_number(call.from_number or ""),
+            "status": _call_status(call, datetime.now(UTC)),
+            "outcome": call.outcome,
+            "duration_seconds": call.duration_seconds,
+            "avg_response_ms": call.avg_response_ms,
+            **_labels(call.started_at, sched),
+        },
+        "turns": [
+            {
+                "role": t.role,
+                "text": t.text,
+                "response_ms": t.response_ms,
+                "stt_ms": t.stt_ms,
+                "llm_ms": t.llm_ms,
+                "tts_ms": t.tts_ms,
+                **_labels(t.created_at, sched),
+            }
+            for t in turns
+        ],
+        "events": [
+            {"type": e.type, "data": e.data, **_labels(e.created_at, sched)}
+            for e in events
+            if e.type in ("call.summary", "call.started") or e.type.startswith("call.status")
+        ],
+        "appointments": [_appointment_row(a, sched) for a in booked],
+    }
+
+
 def _dialect(factory: async_sessionmaker[AsyncSession]) -> str:
     bind = factory.kw.get("bind")
     return str(getattr(getattr(bind, "dialect", None), "name", "unknown"))
@@ -207,6 +304,15 @@ async def build_overview(
                 )
             ).scalar_one()
         kpis["avg_call_seconds"] = round(float(avg)) if avg is not None else None
+        async with timings.measure("average answer time"):
+            answer = (
+                await session.execute(
+                    select(func.avg(Call.avg_response_ms)).where(
+                        Call.avg_response_ms.is_not(None), Call.started_at >= week_ago
+                    )
+                )
+            ).scalar_one()
+        kpis["avg_response_ms"] = round(float(answer)) if answer is not None else None
         calls_7d, bookings_7d = kpis["calls_7d"] or 0, kpis["bookings_7d"] or 0
         kpis["booking_rate_percent"] = round(100 * bookings_7d / calls_7d) if calls_7d else None
         result["kpis"] = kpis
@@ -262,14 +368,21 @@ async def build_overview(
             )
         result["calls"] = [
             {
+                "id": c.id,
                 "from": mask_number(c.from_number or ""),
                 "status": _call_status(c, now),
+                "outcome": c.outcome,
+                "turns": c.turn_count,
+                "avg_response_ms": c.avg_response_ms,
                 "duration_seconds": c.duration_seconds,
                 "booked": c.provider_call_id in booked_calls,
                 **_labels(c.started_at, sched),
             }
             for c in calls
         ]
+
+        async with timings.measure("voice response times"):
+            voice = await _voice_numbers(session)
 
         postgres: dict[str, Any] = {}
         if dialect == "postgresql":
@@ -300,5 +413,6 @@ async def build_overview(
         "query_ms": timings.ms,
         "postgres": postgres or None,
         "redis": redis_info,
+        "voice": voice,
     }
     return result

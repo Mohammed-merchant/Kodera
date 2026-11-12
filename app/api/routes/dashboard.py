@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from app.business.dashboard_stats import build_overview
+from app.business.dashboard_stats import build_overview, call_detail
 from app.core.config import Settings, get_settings
 from app.core.dashboard_auth import (
     COOKIE_NAME,
@@ -98,3 +98,17 @@ async def overview(
     response.headers["Cache-Control"] = "no-store"
     state = request.app.state
     return await build_overview(state.session_factory, state.redis, settings)
+
+
+@router.get("/api/calls/{call_id}", dependencies=[Depends(require_dashboard_login)])
+async def call(
+    call_id: int,
+    request: Request,
+    response: Response,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> dict[str, object]:
+    response.headers["Cache-Control"] = "no-store"
+    detail = await call_detail(request.app.state.session_factory, settings, call_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Call not found")
+    return detail

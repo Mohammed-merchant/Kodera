@@ -119,6 +119,26 @@
   @media (prefers-color-scheme: dark) { .primary { color: #04201d; } }
   .primary:disabled { opacity: .6; cursor: default; }
   .error { color: var(--bad); font-size: 13px; margin-top: 10px; min-height: 1.2em; }
+  /* call detail */
+  .calls li.click { cursor: pointer; }
+  .calls li.click:hover { background: var(--neutral-soft); }
+  dialog { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); color: var(--text); padding: 0; width: min(660px, 94vw); max-height: 88vh; box-shadow: 0 20px 60px rgba(0, 0, 0, .25); }
+  dialog::backdrop { background: rgba(8, 12, 18, .55); }
+  .dlg-head { display: flex; justify-content: space-between; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--card); }
+  .dlg-head h3 { margin: 0; font-size: 16px; }
+  .dlg-body { padding: 14px 18px 20px; display: grid; gap: 14px; overflow: auto; max-height: calc(88vh - 70px); }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; font-size: 13px; color: var(--muted); }
+  .box { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; font-size: 13.5px; }
+  .box h4 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .box p { margin: 3px 0; }
+  .chat { display: grid; gap: 10px; }
+  .turn { max-width: 86%; padding: 9px 12px; border-radius: 14px; background: var(--neutral-soft); white-space: pre-wrap; word-break: break-word; }
+  .turn.caller { justify-self: end; background: var(--accent-soft); border-bottom-right-radius: 4px; }
+  .turn.agent { justify-self: start; border-bottom-left-radius: 4px; }
+  .turn .who { display: block; font-size: 11.5px; color: var(--muted); margin-bottom: 2px; }
+  .timing { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 6px; }
+  .timing .chip { font-size: 11px; padding: 1px 7px; }
+  .tool-ok { color: var(--good); } .tool-bad { color: var(--bad); }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -175,6 +195,11 @@
   </section>
 </div>
 
+<dialog id="detail" aria-labelledby="detail-title">
+  <div class="dlg-head"><h3 id="detail-title">Call</h3><button class="linkbtn" id="detail-close" type="button">Close</button></div>
+  <div class="dlg-body" id="detail-body"></div>
+</dialog>
+
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -191,6 +216,9 @@ function h(tag, cls, text) {
 function put(parent, ...kids) { parent.replaceChildren(...kids); }
 
 const fmtBytes = (n) => n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(0) + " KB" : (n / 1048576).toFixed(1) + " MB";
+const fmtMs = (ms) => ms == null ? "–" : ms < 1000 ? ms + " ms" : (ms / 1000).toFixed(1) + " s";
+const waitClass = (ms) => ms == null ? "" : ms <= 650 ? "good" : ms <= 1000 ? "" : "bad";
+const OUTCOME = { booked: "Booked", cancelled: "Cancelled", info: "Info only", silent: "No speech" };
 const fmtDur = (s) => s == null ? "–" : s < 60 ? s + "s" : Math.floor(s / 60) + "m " + (s % 60) + "s";
 const level = (ms, good, ok) => ms == null ? "off" : ms <= good ? "" : ms <= ok ? "warn" : "bad";
 
@@ -214,6 +242,7 @@ function renderKpis(k) {
     ["Upcoming", k.appointments_upcoming, "from now on"],
     ["Calls today", k.calls_today, k.calls_total + " in total"],
     ["Average call", fmtDur(k.avg_call_seconds), "finished calls"],
+    ["Answer time", fmtMs(k.avg_response_ms), "caller waits · target 0.65 s"],
     ["Booking rate", k.booking_rate_percent == null ? "–" : k.booking_rate_percent + "%", k.bookings_7d + " bookings from " + k.calls_7d + " calls, 7 days"],
   ];
   put($("kpis"), ...items.map(([label, value, sub]) => {
@@ -260,15 +289,60 @@ function renderCalls() {
   if (!data.calls.length) return put($("calls"), h("div", "empty", "No calls yet."));
   const ul = h("ul", "calls");
   data.calls.forEach((c) => {
-    const li = h("li"), left = h("div", "num", c.date + ", " + c.time);
-    left.append(h("span", "sub", c.from + "  ·  " + fmtDur(c.duration_seconds)));
+    const li = h("li", "click"), left = h("div", "num", c.date + ", " + c.time);
+    li.tabIndex = 0; li.setAttribute("role", "button"); li.setAttribute("aria-label", "Open call from " + c.date + " " + c.time);
+    const bits = [c.from, fmtDur(c.duration_seconds)];
+    if (c.avg_response_ms != null) bits.push(fmtMs(c.avg_response_ms) + " answer");
+    left.append(h("span", "sub", bits.join("  ·  ")));
     const right = h("div", "right");
-    right.append(h("span", "chip" + (c.status === "completed" ? " good" : ""), c.status));
-    if (c.booked) right.append(h("span", "chip accent", "Booked"));
-    li.append(left, right); ul.append(li);
+    const label = OUTCOME[c.outcome] || c.status;
+    right.append(h("span", "chip" + (c.outcome === "booked" ? " accent" : c.status === "completed" ? " good" : ""), label));
+    li.append(left, right);
+    li.onclick = () => openCall(c.id);
+    li.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openCall(c.id); } };
+    ul.append(li);
   });
   put($("calls"), ul);
 }
+
+async function openCall(id) {
+  const dlg = $("detail"), body = $("detail-body");
+  put(body, h("div", "muted", "Loading…"));
+  $("detail-title").textContent = "Call"; if (!dlg.open) dlg.showModal();
+  try {
+    const d = await api("calls/" + id);
+    const c = d.call;
+    $("detail-title").textContent = c.date + ", " + c.time;
+    const meta = h("div", "meta");
+    meta.append(h("span", "num", c.from), h("span", "", "·"), h("span", "num", fmtDur(c.duration_seconds)),
+      h("span", "chip" + (c.outcome === "booked" ? " accent" : ""), OUTCOME[c.outcome] || c.status));
+    if (c.avg_response_ms != null) meta.append(h("span", "chip " + waitClass(c.avg_response_ms), "average answer " + fmtMs(c.avg_response_ms)));
+    const parts = [meta];
+
+    const summary = (d.events.find((e) => e.type === "call.summary") || {}).data || {};
+    const actions = h("div", "box"); actions.append(h("h4", "", "What the agent did"));
+    d.appointments.forEach((a) => actions.append(h("p", "tool-ok", "Booked " + a.patient + " for " + a.date + " at " + a.time + (a.reason ? " (" + a.reason + ")" : ""))));
+    (summary.guard_reasons || []).forEach((r) => actions.append(h("p", "tool-bad", "Safety guard blocked a reply: " + r)));
+    if (actions.children.length > 1) parts.push(actions);
+
+    const chat = h("div", "chat");
+    if (!d.turns.length) chat.append(h("div", "muted", "No conversation was recorded for this call."));
+    d.turns.forEach((t) => {
+      const b = h("div", "turn " + t.role); b.append(h("span", "who", (t.role === "caller" ? "Caller" : "Agent") + " · " + t.time), document.createTextNode(t.text));
+      if (t.role === "agent" && t.response_ms != null) {
+        const row = h("div", "timing");
+        row.append(h("span", "chip " + waitClass(t.response_ms), "answered in " + fmtMs(t.response_ms)));
+        [["STT", t.stt_ms], ["LLM", t.llm_ms], ["Voice", t.tts_ms]].forEach(([n, v]) => { if (v != null) row.append(h("span", "chip", n + " " + fmtMs(v))); });
+        b.append(row);
+      }
+      chat.append(b);
+    });
+    parts.push(chat);
+    put(body, ...parts);
+  } catch (e) { if (e.message !== "signed-out") put(body, h("div", "banner", "Could not load this call: " + e.message)); else dlg.close(); }
+}
+$("detail-close").onclick = () => $("detail").close();
+$("detail").addEventListener("click", (e) => { if (e.target === $("detail")) $("detail").close(); });
 
 function tile(title, value, unit, hint, lvl) {
   const t = h("div", "tile"), top = h("div", "top");
@@ -278,8 +352,11 @@ function tile(title, value, unit, hint, lvl) {
 }
 
 function renderPerformance() {
-  const p = data.performance, pg = p.postgres, r = p.redis;
-  put($("tiles"),
+  const p = data.performance, pg = p.postgres, r = p.redis, v = p.voice || {};
+  const voiceTile = v.samples
+    ? tile("Voice response (median)", v.p50_ms, "ms", "Target " + v.target_ms + " ms · slowest 5%: " + v.p95_ms + " ms · " + v.within_target_percent + "% on target", level(v.p50_ms, 650, 1000))
+    : tile("Voice response", null, "", "No recorded calls yet", "off");
+  put($("tiles"), voiceTile,
     tile("Postgres response", p.postgres_ping_ms, "ms", "Simple query, median of 5", level(p.postgres_ping_ms, 10, 50)),
     tile("Booking slot lookup", p.slot_lookup_ms, "ms", "The caller waits for this", level(p.slot_lookup_ms, 40, 120)),
     tile("Redis response", r ? r.ping_ms : null, "ms", r ? "Redis " + r.version + " · " + r.keys + " keys" : "Redis not reachable", r ? level(r.ping_ms, 5, 25) : "bad"),
@@ -304,6 +381,7 @@ function renderPerformance() {
   const foot = [];
   if (pg) foot.push("PostgreSQL " + pg.version + " · database " + fmtBytes(pg.size_bytes) + " · " + pg.connections + " connections");
   if (r) foot.push("Redis memory " + r.memory);
+  if (v.samples) foot.push("Where the wait goes (average): speech-to-text " + fmtMs(v.avg_stt_ms) + ", LLM " + fmtMs(v.avg_llm_ms) + ", voice " + fmtMs(v.avg_tts_ms) + " · from the last " + v.samples + " answers");
   $("foot").textContent = foot.join("   |   ");
 }
 

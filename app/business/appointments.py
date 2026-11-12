@@ -152,7 +152,12 @@ async def free_slots(
         return []
     earliest = sched.now() + timedelta(minutes=MIN_LEAD_MINUTES)
     async with factory() as session:
-        taken = await _booked_between(session, slots[0], slots[-1] + timedelta(minutes=1))
+        # Compare in UTC, the way times are stored (SQLite compares plain text).
+        taken = await _booked_between(
+            session,
+            slots[0].astimezone(UTC),
+            (slots[-1] + timedelta(minutes=1)).astimezone(UTC),
+        )
     return [s for s in slots if s >= earliest and s.astimezone(UTC) not in taken]
 
 

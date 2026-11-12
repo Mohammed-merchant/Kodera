@@ -1,3 +1,9 @@
+import os
+
+# The app reads the real .env at import time; keep tests away from the GPU server
+# and from loading the voice models.
+os.environ.setdefault("VOICE_AGENT_ENABLED", "false")
+
 from collections.abc import AsyncIterator
 
 import pytest_asyncio

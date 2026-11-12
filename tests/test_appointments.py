@@ -182,3 +182,13 @@ async def test_extra_arguments_from_the_model_are_ignored(session_factory: Facto
     day = next_open_day().isoformat()
     result = await call(tools, "check_available_slots", date=day, time="10:00", extra="x")
     assert result["ok"]
+
+
+async def test_the_earliest_slot_of_the_day_is_taken_after_booking(
+    session_factory: Factory,
+) -> None:
+    """10:00 clinic time is 04:30 UTC: the lookup must compare in UTC, or it forgets the booking."""
+    day = next_open_day()
+    assert (await book(session_factory, at(day, "10:00"))).ok
+    assert at(day, "10:00") not in await appts.free_slots(session_factory, SCHED, day)
+    assert not (await book(session_factory, at(day, "10:00"), "Ravi Kumar", "9123456780")).ok

@@ -13,10 +13,14 @@ from typing import Any
 import httpx
 import structlog
 from fastapi import WebSocket
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.business.appointments import schedule_from_settings
+from app.business.call_flush import flush_call
 from app.core.config import Settings
+from app.pipeline import greeting as greeting_audio
+from app.pipeline.call_recorder import CallRecorder
 from app.pipeline.prompts import build_greeting, build_system_prompt
 
 log = structlog.get_logger(__name__)
@@ -56,15 +60,15 @@ async def run_call(
     call_sid: str,
     caller_number: str,
     session_factory: async_sessionmaker[AsyncSession],
+    redis: Redis,
     settings: Settings,
 ) -> str:
     """Run the agent until the call ends. Returns a short reason for the call log."""
-    if not await gpu_server_reachable(settings):
-        log.error("gpu_server_unreachable", call_sid=call_sid, url=settings.llm_base_url)
-        return "gpu unavailable"
+    # Checked while the pipeline is being built, so it adds no waiting before the greeting.
+    gpu_check = asyncio.create_task(gpu_server_reachable(settings))
 
     from pipecat.audio.vad.silero import SileroVADAnalyzer
-    from pipecat.frames.frames import TTSSpeakFrame
+    from pipecat.frames.frames import TTSAudioRawFrame, TTSSpeakFrame
     from pipecat.pipeline.pipeline import Pipeline
     from pipecat.pipeline.runner import PipelineRunner
     from pipecat.pipeline.worker import PipelineParams, PipelineWorker
@@ -83,8 +87,13 @@ async def run_call(
     )
     from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
+    from app.pipeline.guards import ReplyGuard
+    from app.pipeline.latency import LatencyObserver
     from app.pipeline.services import create_llm, create_stt, create_tts
     from app.pipeline.tools import build_tools
+
+    recorder = CallRecorder(redis, call_sid, provider="exotel", caller=caller_number)
+    await recorder.start()
 
     transport = FastAPIWebsocketTransport(
         ws,
@@ -97,7 +106,10 @@ async def run_call(
     )
 
     greeting = build_greeting(settings)
-    tools = build_tools(settings, session_factory, caller_number=caller_number, call_sid=call_sid)
+    greeting_pcm = greeting_audio.cached(settings)
+    tools = build_tools(
+        settings, session_factory, caller_number=caller_number, call_sid=call_sid, recorder=recorder
+    )
     # Pipecat does not put the spoken greeting into the chat history. Without this the model
     # does not know it already greeted, and answers every "hello" with the greeting again.
     context = LLMContext(
@@ -129,12 +141,14 @@ async def run_call(
 
     llm = create_llm(settings)
     tts = create_tts(settings)
+    latency = LatencyObserver()
     pipeline = Pipeline(
         [
             transport.input(),
             create_stt(settings),
             aggregators.user(),
             llm,
+            ReplyGuard(recorder),  # blocks false "booked" claims and medical advice
             tts,
             transport.output(),
             aggregators.assistant(),
@@ -145,17 +159,36 @@ async def run_call(
         params=PipelineParams(
             audio_in_sample_rate=PIPELINE_INPUT_RATE,
             audio_out_sample_rate=PIPELINE_OUTPUT_RATE,
-            enable_metrics=True,  # logs time-to-first-byte of STT, LLM and TTS for every turn
+            enable_metrics=True,  # time-to-first-byte of STT, LLM and TTS for every turn
         ),
+        observers=[latency],
         idle_timeout_secs=settings.agent_idle_seconds,
     )
 
     reason = "call ended"
+    gpu_down = False
+
+    @aggregators.user().event_handler("on_user_turn_stopped")  # type: ignore[untyped-decorator]
+    async def _caller_said(_aggregator: Any, _strategy: Any, message: Any) -> None:
+        await recorder.add_turn("caller", message.content or "")
+
+    @aggregators.assistant().event_handler("on_assistant_turn_stopped")  # type: ignore[untyped-decorator]
+    async def _agent_said(_aggregator: Any, message: Any) -> None:
+        text = (message.content or "").strip()
+        if text and text != greeting.strip():  # the greeting is recorded when it is played
+            await recorder.add_turn("agent", text, **latency.take())
 
     @transport.event_handler("on_client_connected")  # type: ignore[untyped-decorator]
     async def _greet(_transport: Any, _client: Any) -> None:
-        # A fixed greeting skips the LLM, so the caller hears something right away.
-        await worker.queue_frames([TTSSpeakFrame(greeting)])
+        await recorder.add_turn("agent", greeting)
+        if greeting_pcm:  # ready-made audio: no round trip to the GPU server
+            await tts.queue_frame(
+                TTSAudioRawFrame(
+                    audio=greeting_pcm, sample_rate=greeting_audio.SAMPLE_RATE, num_channels=1
+                )
+            )
+        else:
+            await worker.queue_frames([TTSSpeakFrame(greeting)])
 
     @llm.event_handler("on_function_calls_started")  # type: ignore[untyped-decorator]
     async def _filler(_service: Any, _calls: Any) -> None:
@@ -166,6 +199,20 @@ async def run_call(
     async def _hangup(_transport: Any, _client: Any) -> None:
         await worker.cancel()
 
+    async def _watch_gpu() -> None:
+        nonlocal gpu_down
+        if not await gpu_check:  # a slow failure: the pipeline is already running, stop it
+            gpu_down = True
+            await worker.cancel()
+
+    await asyncio.wait({gpu_check}, timeout=0.05)  # a refused connection answers within this
+    if gpu_check.done() and not gpu_check.result():  # fast failure: do not even start
+        log.error("gpu_server_unreachable", call_sid=call_sid, url=settings.llm_base_url)
+        await recorder.finish("gpu unavailable")
+        await flush_call(redis, session_factory, call_sid)
+        return "gpu unavailable"
+
+    watcher = asyncio.create_task(_watch_gpu())
     try:
         await asyncio.wait_for(
             PipelineRunner(handle_sigint=False).run(worker), settings.max_call_seconds
@@ -175,4 +222,12 @@ async def run_call(
     except Exception:
         log.exception("agent_failed", call_sid=call_sid)
         reason = "agent error"
+    finally:
+        watcher.cancel()
+        if gpu_down:
+            reason = "gpu unavailable"
+            log.error("gpu_server_unreachable", call_sid=call_sid, url=settings.llm_base_url)
+        # Everything recorded in Redis during the call is saved to Postgres now.
+        await recorder.finish(reason)
+        await flush_call(redis, session_factory, call_sid)
     return reason

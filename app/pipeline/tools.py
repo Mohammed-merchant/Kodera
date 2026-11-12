@@ -27,6 +27,7 @@ def build_tools(
     *,
     caller_number: str,
     call_sid: str,
+    recorder: Any = None,
 ) -> list[Any]:
     # Imported here so the rest of the app does not load Pipecat.
     from pipecat.services.llm_service import FunctionCallParams
@@ -131,6 +132,15 @@ def build_tools(
             ok=outcome.ok,
             patient_phone=mask_number(phone),
         )
+        if recorder is not None:
+            recorder.booked = recorder.booked or outcome.ok  # lets the reply guard allow "booked"
+            await recorder.add_event(
+                "booking",
+                ok=outcome.ok,
+                patient=patient_name.strip()[:100],
+                slot=outcome.slot.isoformat() if outcome.slot else None,
+                message=outcome.message,
+            )
         await params.result_callback({"ok": outcome.ok, "message": outcome.message})
 
     @guarded
@@ -145,6 +155,9 @@ def build_tools(
         day = appts.parse_day(date, sched) if date else None
         outcome = await appts.cancel(factory, sched, caller_phone, day)
         log.info("appointment_cancel", call_sid=call_sid, ok=outcome.ok)
+        if recorder is not None:
+            recorder.cancelled = recorder.cancelled or outcome.ok
+            await recorder.add_event("cancel", ok=outcome.ok, message=outcome.message)
         await params.result_callback({"ok": outcome.ok, "message": outcome.message})
 
     @guarded

@@ -34,6 +34,10 @@ class Call(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     duration_seconds: Mapped[int | None] = mapped_column(Integer)
+    # Filled when the call ends (see app/business/call_flush.py).
+    outcome: Mapped[str | None] = mapped_column(String(20))  # booked | cancelled | info | silent
+    turn_count: Mapped[int | None] = mapped_column(Integer)
+    avg_response_ms: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
@@ -62,6 +66,11 @@ class TranscriptTurn(Base):
     call_id: Mapped[int] = mapped_column(ForeignKey("calls.id", ondelete="CASCADE"), index=True)
     role: Mapped[str] = mapped_column(String(20))  # "caller" or "agent"
     text: Mapped[str] = mapped_column(Text)
+    # Agent turns only: how long the caller waited, and where the time went (milliseconds).
+    response_ms: Mapped[int | None] = mapped_column(Integer)
+    stt_ms: Mapped[int | None] = mapped_column(Integer)
+    llm_ms: Mapped[int | None] = mapped_column(Integer)
+    tts_ms: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     call: Mapped[Call] = relationship(back_populates="turns")

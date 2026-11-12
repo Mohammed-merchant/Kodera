@@ -117,6 +117,7 @@ async def exotel_media_stream(
                             call_sid=call_sid,
                             caller_number=caller_number,
                             session_factory=ws.app.state.session_factory,
+                            redis=ws.app.state.redis,
                             settings=settings,
                         )
                         await saving

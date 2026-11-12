@@ -14,6 +14,7 @@ from app.api.ws import exotel_media, media
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
 from app.db.session import create_session_factory
+from app.pipeline import greeting as greeting_audio
 from app.pipeline.voice_pipeline import warm_up
 
 settings = get_settings()
@@ -38,14 +39,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.redis = Redis.from_url(settings.redis_url)
     log.info("app_started", version=__version__, env=settings.app_env)
     warm_up_task = None
+    greeting_task = None
     if settings.voice_agent_enabled:
         # Runs in a thread so startup (and /health) are not delayed.
         warm_up_task = asyncio.create_task(asyncio.to_thread(_warm_up_agent))
+        greeting_task = asyncio.create_task(greeting_audio.prefetch(settings))
     try:
         yield
     finally:
-        if warm_up_task:
-            warm_up_task.cancel()
+        for task in (warm_up_task, greeting_task):
+            if task:
+                task.cancel()
         await app.state.redis.aclose()
         await app.state.db_engine.dispose()
         log.info("app_stopped")

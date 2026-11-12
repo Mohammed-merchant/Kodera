@@ -10,9 +10,10 @@ from app.api.ws import exotel_media
 from app.business.appointments import schedule_from_settings
 from app.core.config import Settings, get_settings
 from app.main import app
-from app.pipeline import services
+from app.pipeline import services, voice_pipeline
 from app.pipeline.prompts import build_greeting, build_system_prompt
 from app.pipeline.voice_pipeline import gpu_server_reachable
+from tests.fakes import RecorderRedis
 from tests.test_exotel_ws import (
     AUTH,
     SAVED,
@@ -69,11 +70,26 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setattr(exotel_media, "record_stream_event", fake_record)
     app.dependency_overrides[get_settings] = lambda: agent_settings()
     with TestClient(app) as c:
+        app.state.redis = RecorderRedis()  # no real Redis in unit tests
+        voice_pipeline.warm_up()  # the app does this at start-up; imports take seconds
         yield c
     app.dependency_overrides.clear()
 
 
-def test_call_ends_cleanly_when_gpu_server_is_down(client: TestClient) -> None:
+def test_call_ends_cleanly_when_gpu_server_is_down(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def down(_settings: Settings) -> bool:
+        return False
+
+    saved_calls: list[str] = []
+
+    async def fake_flush(_redis: object, _factory: object, call_sid: str) -> bool:
+        saved_calls.append(call_sid)
+        return True
+
+    monkeypatch.setattr(voice_pipeline, "gpu_server_reachable", down)  # no slow real connect
+    monkeypatch.setattr(voice_pipeline, "flush_call", fake_flush)
     with client.websocket_connect("/ws/exotel", headers=AUTH) as ws:
         ws.send_text(start_msg())
         with pytest.raises(WebSocketDisconnect):  # the server hangs up at once
@@ -81,3 +97,4 @@ def test_call_ends_cleanly_when_gpu_server_is_down(client: TestClient) -> None:
     stopped = [d for _, event, d in SAVED if event == "stream.stopped"]
     assert [d["reason"] for d in stopped] == ["gpu unavailable"]
     assert [event for _, event, _ in SAVED][0] == "stream.started"
+    assert saved_calls  # the call is still written to Postgres at hang-up
