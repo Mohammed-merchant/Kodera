@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     cal_event_type_id: int = 0  # the "Consultation" event type in Cal.diy
     cal_webhook_secret: SecretStr = SecretStr("")  # same secret you give the Cal.diy webhook
     cal_public_url: str = ""  # e.g. https://cal.example.com (shown as a link on the dashboard)
+    cal_booking_page: str = ""  # e.g. dr-sharma/consultation: the patients' booking page path
     clinic_timezone_name: str = "Asia/Kolkata"  # IANA name; Cal.diy needs it, not just an offset
     clinic_phone_country_code: str = "+91"  # callers' numbers are sent to Cal.diy in E.164
 

@@ -47,6 +47,7 @@
   @media (prefers-reduced-motion: reduce) { .dot.pulse { animation: none; } }
   .linkbtn { background: none; border: 0; color: var(--muted); padding: 4px 6px; border-radius: 6px; }
   .linkbtn:hover { color: var(--text); background: var(--neutral-soft); }
+  a.linkbtn { text-decoration: none; display: inline-block; font-size: 13px; }
 
   /* cards */
   .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
@@ -119,6 +120,18 @@
   @media (prefers-color-scheme: dark) { .primary { color: #04201d; } }
   .primary:disabled { opacity: .6; cursor: default; }
   .error { color: var(--bad); font-size: 13px; margin-top: 10px; min-height: 1.2em; }
+  /* calendar */
+  .cal-links { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 16px 4px; }
+  .cal-links a { text-decoration: none; color: var(--accent); border: 1px solid var(--line); border-radius: 99px; padding: 4px 12px; font-size: 13px; }
+  .cal-links a:hover { background: var(--accent-soft); }
+  .days { display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); gap: 10px; padding: 14px 16px 6px; }
+  .day { text-align: left; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--text); padding: 10px 12px; }
+  .day[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+  .day .d { font-size: 12.5px; color: var(--muted); }
+  .day .n { font-size: 22px; font-weight: 650; }
+  .day.none .n { color: var(--muted); }
+  .times { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 16px 16px; }
+  .cal-note { padding: 12px 16px; font-size: 13.5px; color: var(--muted); }
   /* call detail */
   .calls li.click { cursor: pointer; }
   .calls li.click:hover { background: var(--neutral-soft); }
@@ -184,6 +197,14 @@
       <div class="scroll" id="calls"></div>
     </section>
   </div>
+
+  <section class="card section" aria-labelledby="cal-title">
+    <div class="card-head"><h2 id="cal-title">Calendar</h2><span class="chip" id="cal-status">Loading…</span></div>
+    <div class="cal-note" id="cal-note" hidden></div>
+    <div class="cal-links" id="cal-links"></div>
+    <div class="days" id="cal-days" role="group" aria-label="Next 7 days"></div>
+    <div class="times" id="cal-times" aria-live="polite"></div>
+  </section>
 
   <section class="card section" aria-labelledby="perf-title">
     <div class="card-head"><h2 id="perf-title">System and database performance</h2><span class="muted" style="font-size:12.5px">measured live on each refresh</span></div>
@@ -394,11 +415,37 @@ function renderAll() {
   renderKpis(data.kpis); renderTabs(); renderAppointments(); renderCalls(); renderPerformance();
 }
 
+/* ---------- calendar ---------- */
+let calDay = null;
+function renderCalendar(c) {
+  const st = $("cal-status"), note = $("cal-note");
+  const name = c.backend === "calcom" ? "Cal.diy" : "Built-in calendar";
+  st.className = "chip " + (c.status === "ok" ? "good" : "bad");
+  st.textContent = c.status === "ok" ? name + " · connected" : c.status === "not_configured" ? name + " · not set up" : name + " · not reachable";
+  note.hidden = c.status === "ok" && c.backend !== "local";
+  note.textContent = c.status !== "ok" ? (c.error || "") : "Bookings use the built-in table. Switch to Cal.diy with BOOKING_BACKEND=calcom (see calcom/README.md).";
+  put($("cal-links"), ...c.links.map((l) => { const a = h("a", "", l.label + " ↗"); a.href = l.url; a.target = "_blank"; a.rel = "noopener"; return a; }));
+  const days = c.days || [];
+  if (!calDay || !days.some((d) => d.date === calDay)) calDay = (days.find((d) => d.free) || days[0] || {}).date;
+  put($("cal-days"), ...days.map((d) => {
+    const b = h("button", "day" + (d.free ? "" : " none")); b.type = "button"; b.setAttribute("aria-pressed", String(d.date === calDay));
+    b.append(h("div", "d", d.label), h("div", "n num", d.closed ? "Closed" : d.free), h("div", "d", d.closed ? "" : "free slots"));
+    b.onclick = () => { calDay = d.date; renderCalendar(c); };
+    return b;
+  }));
+  const sel = days.find((d) => d.date === calDay);
+  put($("cal-times"), ...(sel && sel.times.length ? sel.times.map((t) => h("span", "chip num", t)) : [h("span", "muted", sel ? (sel.closed ? "The clinic is closed on this day." : "No free slots on this day.") : "")]));
+}
+async function loadCalendar() {
+  try { renderCalendar(await api("calendar")); }
+  catch (e) { if (e.message !== "signed-out") { $("cal-status").className = "chip bad"; $("cal-status").textContent = "Calendar unavailable"; } }
+}
+
 /* ---------- loading ---------- */
 async function load() {
   try {
     data = await api("overview");
-    showApp(); renderAll();
+    showApp(); renderAll(); loadCalendar();
     $("error").hidden = true; lastOk = Date.now();
     const d = $("live-dot"); d.className = "dot"; void d.offsetWidth; d.classList.add("pulse");
     tick();

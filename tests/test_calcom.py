@@ -370,3 +370,90 @@ async def test_the_agent_does_not_promise_when_cal_is_down(
 
 def test_fake_params_are_shared_with_the_other_tests():
     assert FakeParams().result is None  # keeps the import honest
+
+
+# ---------- dashboard: the Calendar section ----------
+
+
+async def calendar_json(web: httpx.AsyncClient) -> dict:
+    await web.post("/dashboard/api/login", json={"password": "dash"})
+    return (await web.get("/dashboard/api/calendar")).json()
+
+
+@pytest_asyncio.fixture
+async def dash(session_factory: Factory) -> AsyncIterator[httpx.AsyncClient]:
+    from app.business import dashboard_stats
+
+    dashboard_stats._calendar_cache.clear()
+    app.state.session_factory = session_factory
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        yield c
+    app.dependency_overrides.clear()
+    dashboard_stats._calendar_cache.clear()
+
+
+async def test_the_calendar_needs_a_login(dash: httpx.AsyncClient):
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        _env_file=None, dashboard_password=SecretStr("dash")
+    )
+    assert (await dash.get("/dashboard/api/calendar")).status_code == 401
+
+
+async def test_the_built_in_calendar_shows_the_week(dash: httpx.AsyncClient):
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        _env_file=None, dashboard_password=SecretStr("dash"), cal_public_url=""
+    )
+    cal = await calendar_json(dash)
+    assert cal["backend"] == "local" and cal["status"] == "ok" and cal["links"] == []
+    assert len(cal["days"]) == 7
+    closed = [d for d in cal["days"] if d["closed"]]
+    assert all(d["free"] == 0 for d in closed)  # Sundays are closed by default
+    assert any(d["free"] > 0 and d["times"] for d in cal["days"] if not d["closed"])
+
+
+async def test_the_calendar_reads_cal_diy_and_links_into_it(
+    dash: httpx.AsyncClient, cal: FakeCal, backend: CalBackend, monkeypatch: pytest.MonkeyPatch
+):
+    from app.business import dashboard_stats
+
+    monkeypatch.setattr(dashboard_stats, "make_backend", lambda s, f: backend)
+    app.dependency_overrides[get_settings] = lambda: settings_for_cal(
+        dashboard_password=SecretStr("dash"),
+        cal_public_url="https://cal.example.com/",
+        cal_booking_page="dr-sharma/consultation",
+    )
+    data = await calendar_json(dash)
+    assert data["backend"] == "calcom" and data["status"] == "ok"
+    day = next(d for d in data["days"] if d["date"] == cal.day)
+    assert day["free"] == 3 and day["times"] == ["10:00", "10:15", "17:00"]
+    assert {link["label"]: link["url"] for link in data["links"]} == {
+        "Bookings": "https://cal.example.com/bookings/upcoming",
+        "Availability": "https://cal.example.com/availability",
+        "Event types": "https://cal.example.com/event-types",
+        "Patient booking page": "https://cal.example.com/dr-sharma/consultation",
+    }
+    calls_before = len(cal.calls)
+    await dash.get("/dashboard/api/calendar")  # a refresh within 45 s does not hit Cal.diy again
+    assert len(cal.calls) == calls_before
+
+
+async def test_the_calendar_says_so_when_cal_diy_is_down_or_not_set_up(
+    dash: httpx.AsyncClient, cal: FakeCal, backend: CalBackend, monkeypatch: pytest.MonkeyPatch
+):
+    from app.business import dashboard_stats
+
+    cal.down = True
+    monkeypatch.setattr(dashboard_stats, "make_backend", lambda s, f: backend)
+    app.dependency_overrides[get_settings] = lambda: settings_for_cal(
+        dashboard_password=SecretStr("dash")
+    )
+    down = await calendar_json(dash)
+    assert down["status"] == "error" and "Cal.diy" in down["error"]
+
+    monkeypatch.undo()
+    dashboard_stats._calendar_cache.clear()
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        _env_file=None, dashboard_password=SecretStr("dash"), booking_backend="calcom"
+    )
+    missing = (await dash.get("/dashboard/api/calendar")).json()
+    assert missing["status"] == "not_configured" and "CAL_API_KEY" in missing["error"]

@@ -239,6 +239,72 @@ async def call_detail(
     }
 
 
+_calendar_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+CALENDAR_CACHE_SECONDS = 45  # the dashboard refreshes every 15 s; do not hammer Cal.diy
+CALENDAR_DAYS = 7
+
+
+def _cal_links(settings: Settings) -> list[dict[str, str]]:
+    base = settings.cal_public_url.rstrip("/")
+    if not base:
+        return []
+    links = [
+        ("Bookings", "/bookings/upcoming"),
+        ("Availability", "/availability"),
+        ("Event types", "/event-types"),
+    ]
+    if settings.cal_booking_page:
+        links.append(("Patient booking page", "/" + settings.cal_booking_page.strip("/")))
+    return [{"label": name, "url": base + path} for name, path in links]
+
+
+async def calendar_overview(
+    factory: async_sessionmaker[AsyncSession], settings: Settings
+) -> dict[str, Any]:
+    """Free times for the next 7 days from the active booking backend, plus Cal.diy links."""
+    cache_key = f"{settings.booking_backend}:{settings.cal_event_type_id}"
+    hit = _calendar_cache.get(cache_key)
+    if hit and time.monotonic() - hit[0] < CALENDAR_CACHE_SECONDS:
+        return hit[1]
+
+    sched = appts.schedule_from_settings(settings)
+    out: dict[str, Any] = {
+        "backend": settings.booking_backend,
+        "status": "ok",
+        "error": None,
+        "cal_url": settings.cal_public_url or None,
+        "links": _cal_links(settings),
+        "days": [],
+    }
+    try:
+        backend = make_backend(settings, factory)
+    except ValueError as exc:
+        out.update(status="not_configured", error=str(exc))
+        return out
+    today = sched.now().date()
+    for offset in range(CALENDAR_DAYS):
+        day = today + timedelta(days=offset)
+        entry: dict[str, Any] = {
+            "date": day.isoformat(),
+            "label": f"{day:%a} {day.day} {day:%b}",
+            "closed": backend.is_closed(day),
+            "free": 0,
+            "times": [],
+        }
+        if not entry["closed"]:
+            try:
+                slots = await backend.free_slots(day)
+            except Exception as exc:  # Cal.diy down: say so once, do not break the page
+                out.update(status="error", error=f"{type(exc).__name__}: {str(exc)[:160]}")
+                break
+            entry["free"] = len(slots)
+            entry["times"] = [f"{s.astimezone(sched.tz):%H:%M}" for s in slots[:60]]
+        out["days"].append(entry)
+    if out["status"] == "ok":  # failures are not cached, so recovery shows at once
+        _calendar_cache[cache_key] = (time.monotonic(), out)
+    return out
+
+
 def _dialect(factory: async_sessionmaker[AsyncSession]) -> str:
     bind = factory.kw.get("bind")
     return str(getattr(getattr(bind, "dialect", None), "name", "unknown"))
