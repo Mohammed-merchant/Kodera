@@ -13,6 +13,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.business import appointments as appts
+from app.business.booking_backend import BookingBackend, make_backend
 from app.core.config import Settings
 from app.core.privacy import mask_number
 
@@ -28,11 +29,13 @@ def build_tools(
     caller_number: str,
     call_sid: str,
     recorder: Any = None,
+    backend: BookingBackend | None = None,
 ) -> list[Any]:
     # Imported here so the rest of the app does not load Pipecat.
     from pipecat.services.llm_service import FunctionCallParams
 
     sched = appts.schedule_from_settings(settings)
+    backend = backend or make_backend(settings, factory)
     caller_phone = appts.normalize_phone(caller_number)
 
     def bad(message: str) -> dict[str, Any]:
@@ -72,9 +75,9 @@ def build_tools(
         day = appts.parse_day(date, sched)
         if day is None:
             return await params.result_callback(bad("Ask the caller for a clear date."))
-        free = await appts.free_slots(factory, sched, day)
+        free = await backend.free_slots(day)
         if not free:
-            closed = day.weekday() not in sched.open_days
+            closed = backend.is_closed(day)
             msg = "The clinic is closed that day." if closed else "No free slots left that day."
             return await params.result_callback(bad(msg))
         shown = free[:MAX_SLOTS_OFFERED]
@@ -117,9 +120,7 @@ def build_tools(
         if len(patient_name.strip()) < 2:
             return await params.result_callback(bad("Ask for the patient's name."))
         slot = datetime.combine(day, clock, tzinfo=sched.tz)
-        outcome = await appts.book(
-            factory,
-            sched,
+        outcome = await backend.book(
             name=patient_name,
             phone=phone,
             slot=slot,
@@ -153,7 +154,7 @@ def build_tools(
         if caller_phone is None:
             return await params.result_callback(bad("Ask the caller for their phone number."))
         day = appts.parse_day(date, sched) if date else None
-        outcome = await appts.cancel(factory, sched, caller_phone, day)
+        outcome = await backend.cancel(caller_phone, day)
         log.info("appointment_cancel", call_sid=call_sid, ok=outcome.ok)
         if recorder is not None:
             recorder.cancelled = recorder.cancelled or outcome.ok
@@ -165,8 +166,8 @@ def build_tools(
         """List the caller's upcoming appointments."""
         if caller_phone is None:
             return await params.result_callback(bad("Ask the caller for their phone number."))
-        mine = await appts.upcoming(factory, sched, caller_phone)
-        said = [appts.speak_slot(appts.as_aware(a.slot_start), sched) for a in mine]
+        mine = await backend.upcoming(caller_phone)
+        said = [appts.speak_slot(when, sched) for when in mine]
         await params.result_callback(
             {"ok": True, "appointments": said or "none"}  # "none" reads better than []
         )

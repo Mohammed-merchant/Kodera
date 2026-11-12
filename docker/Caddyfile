@@ -28,3 +28,7 @@
 		format json
 	}
 }
+
+# Extra sites (for example Cal.diy: calcom/deploy.sh writes docker/conf.d/calcom.caddy).
+# Nothing here when no extra site is set up.
+import /etc/caddy/conf.d/*.caddy

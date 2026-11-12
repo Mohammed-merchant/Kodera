@@ -61,6 +61,16 @@ class Settings(BaseSettings):
     voice_agent_enabled: bool = True
     agent_name: str = "Kodera"
     agent_greeting: str = "Hello, thank you for calling {clinic}. How can I help you today?"
+    # --- Where appointments live: "local" (our own table) or "calcom" (self-hosted Cal.diy). ---
+    booking_backend: Literal["local", "calcom"] = "local"
+    cal_api_url: str = "http://calcom-api:80"  # Cal.diy API v2, reached inside the Docker network
+    cal_api_key: SecretStr = SecretStr("")  # Cal.diy: Settings > Developer > API keys (cal_...)
+    cal_event_type_id: int = 0  # the "Consultation" event type in Cal.diy
+    cal_webhook_secret: SecretStr = SecretStr("")  # same secret you give the Cal.diy webhook
+    cal_public_url: str = ""  # e.g. https://cal.example.com (shown as a link on the dashboard)
+    clinic_timezone_name: str = "Asia/Kolkata"  # IANA name; Cal.diy needs it, not just an offset
+    clinic_phone_country_code: str = "+91"  # callers' numbers are sent to Cal.diy in E.164
+
     # --- Clinic (the agent is the clinic's phone receptionist). EDIT THESE in .env. ---
     clinic_name: str = "City Care Clinic"
     clinic_doctor: str = "Dr. Sharma"

@@ -33,3 +33,7 @@ Thumbs.db
 model_server/models/
 *.gguf
 *.onnx
+
+# Cal.diy: database dumps and the generated Caddy site
+calcom/backups/
+docker/conf.d/*.caddy

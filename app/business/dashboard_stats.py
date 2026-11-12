@@ -17,6 +17,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.business import appointments as appts
+from app.business.booking_backend import make_backend
 from app.core.config import Settings
 from app.core.privacy import mask_number
 from app.db.models import Appointment, Call, CallEvent, TranscriptTurn
@@ -75,6 +76,7 @@ def _appointment_row(a: Appointment, sched: appts.Schedule) -> dict[str, Any]:
         "reason": a.reason or "",
         "status": a.status,
         "by_phone_agent": bool(a.booked_via_call),
+        "source": a.source,
         **_labels(a.slot_start, sched),
     }
 
@@ -253,7 +255,11 @@ async def build_overview(
     day_end = day_start + timedelta(days=1)
     week_ago = now - timedelta(days=7)
     timings = Timings()
-    result: dict[str, Any] = {"generated_at": now.isoformat(), "clinic": settings.clinic_name}
+    result: dict[str, Any] = {
+        "generated_at": now.isoformat(),
+        "clinic": settings.clinic_name,
+        "cal_url": settings.cal_public_url or None,
+    }
 
     async with factory() as session:
 
@@ -389,17 +395,22 @@ async def build_overview(
             async with timings.measure("postgres statistics"):
                 postgres = await _postgres_details(session)
 
-    # The booking agent runs this exact lookup while the caller waits.
-    day = sched.now().date()
-    for _ in range(14):
-        if day.weekday() in sched.open_days:
-            break
-        day += timedelta(days=1)
-    lookups = []
-    for _ in range(3):
-        start = time.perf_counter()
-        await appts.free_slots(factory, sched, day)
-        lookups.append((time.perf_counter() - start) * 1000)
+    # The booking agent runs this exact lookup while the caller waits (Cal.diy or local table).
+    backend_name, backend_error = settings.booking_backend, None
+    lookups: list[float] = []
+    try:
+        backend = make_backend(settings, factory)
+        day = sched.now().date()
+        for _ in range(14):
+            if not backend.is_closed(day):
+                break
+            day += timedelta(days=1)
+        for _ in range(3 if backend.name == "local" else 1):  # do not hammer Cal.diy
+            start = time.perf_counter()
+            await backend.free_slots(day)
+            lookups.append((time.perf_counter() - start) * 1000)
+    except Exception as exc:
+        backend_error = f"{type(exc).__name__}: {str(exc)[:120]}"
 
     redis_info: dict[str, Any] | None
     try:
@@ -409,7 +420,9 @@ async def build_overview(
 
     result["performance"] = {
         "postgres_ping_ms": await _ping_db(factory),
-        "slot_lookup_ms": round(statistics.median(lookups), 1),
+        "slot_lookup_ms": round(statistics.median(lookups), 1) if lookups else None,
+        "booking_backend": backend_name,
+        "booking_backend_error": backend_error,
         "query_ms": timings.ms,
         "postgres": postgres or None,
         "redis": redis_info,

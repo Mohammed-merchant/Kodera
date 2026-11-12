@@ -160,6 +160,7 @@
     <div class="brand" id="brand">Clinic <span>dashboard</span></div>
     <div class="tools">
       <span class="live" aria-live="polite"><span class="dot off" id="live-dot"></span><span id="updated">Loading…</span></span>
+      <a class="linkbtn" id="cal-link" href="#" target="_blank" rel="noopener" hidden>Open Cal.diy</a>
       <button class="linkbtn" id="refresh" type="button">Refresh</button>
       <button class="linkbtn" id="logout" type="button">Sign out</button>
     </div>
@@ -280,6 +281,7 @@ function renderAppointments() {
     const phone = h("td", "hide-sm num", a.phone);
     const status = h("td"); status.append(h("span", "chip " + (a.status === "cancelled" ? "bad" : tab === "past" ? "" : "good"), a.status === "cancelled" ? "Cancelled" : tab === "past" ? "Done" : "Booked"));
     if (a.by_phone_agent) { status.append(" ", h("span", "chip accent", "AI call")); }
+    if (a.source === "calcom") { status.append(" ", h("span", "chip", "Cal.diy")); }
     tr.append(when, who, phone, status); body.append(tr);
   });
   table.append(body); put($("appointments"), table);
@@ -358,7 +360,7 @@ function renderPerformance() {
     : tile("Voice response", null, "", "No recorded calls yet", "off");
   put($("tiles"), voiceTile,
     tile("Postgres response", p.postgres_ping_ms, "ms", "Simple query, median of 5", level(p.postgres_ping_ms, 10, 50)),
-    tile("Booking slot lookup", p.slot_lookup_ms, "ms", "The caller waits for this", level(p.slot_lookup_ms, 40, 120)),
+    tile("Booking slot lookup", p.slot_lookup_ms, "ms", p.booking_backend_error ? "Booking system error: " + p.booking_backend_error : (p.booking_backend === "calcom" ? "Cal.diy, the caller waits for this" : "Local database, the caller waits for this"), p.booking_backend_error ? "bad" : level(p.slot_lookup_ms, p.booking_backend === "calcom" ? 400 : 40, p.booking_backend === "calcom" ? 1000 : 120)),
     tile("Redis response", r ? r.ping_ms : null, "ms", r ? "Redis " + r.version + " · " + r.keys + " keys" : "Redis not reachable", r ? level(r.ping_ms, 5, 25) : "bad"),
     tile("Postgres cache hits", pg && pg.cache_hit_percent != null ? pg.cache_hit_percent : null, "%", "Reads served from memory", pg && pg.cache_hit_percent != null ? (pg.cache_hit_percent >= 95 ? "" : pg.cache_hit_percent >= 85 ? "warn" : "bad") : "off"));
 
@@ -388,6 +390,7 @@ function renderPerformance() {
 function renderAll() {
   $("brand").replaceChildren(document.createTextNode(data.clinic + " "), h("span", "", "dashboard"));
   document.title = data.clinic + " · Dashboard";
+  const cal = $("cal-link"); cal.hidden = !data.cal_url; if (data.cal_url) cal.href = data.cal_url;
   renderKpis(data.kpis); renderTabs(); renderAppointments(); renderCalls(); renderPerformance();
 }
 

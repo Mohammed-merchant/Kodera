@@ -98,6 +98,9 @@ class Appointment(Base):
     slot_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     status: Mapped[str] = mapped_column(String(20), default="booked")  # booked | cancelled
     booked_via_call: Mapped[str | None] = mapped_column(String(64))
+    # "local" = our own booking, "calcom" = the booking lives in Cal.diy (external_id = its uid).
+    source: Mapped[str] = mapped_column(String(20), default="local")
+    external_id: Mapped[str | None] = mapped_column(String(64), unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow

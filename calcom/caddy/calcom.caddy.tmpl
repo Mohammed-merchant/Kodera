@@ -1,0 +1,28 @@
+# Rendered by ./deploy.sh into docker/conf.d/calcom.caddy (CAL_DOMAIN is filled in).
+# Caddy gets and renews the HTTPS certificate for this hostname by itself.
+
+__CAL_DOMAIN__ {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+
+	# Cal.diy's REST API (the voice agent talks to it directly inside Docker; this route is
+	# for the Cal.diy web pages and for you).
+	handle /api/v2/* {
+		uri strip_prefix /api
+		reverse_proxy calcom-api:80
+	}
+
+	handle {
+		reverse_proxy calcom-web:3000
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}
