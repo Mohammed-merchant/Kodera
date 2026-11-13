@@ -273,11 +273,16 @@ cmd_setup() {
   wait "$p2" || die "model download failed"
   LLAMA_DIR=$MS/bin/llama
   step_env; step_server
-  if [ "${SKIP_NGROK:-}" = 1 ]; then
-    say "Tunnel skipped (SKIP_NGROK=1). Open it later: NGROK_AUTHTOKEN=... bash $0 tunnel"
-  else step_ngrok; fi
+  # Check (and warm up) BEFORE the tunnel opens: on a fresh GPU the first LLM request can take
+  # about a minute while CUDA prepares its kernels, and a caller must not be the one to wait.
   step_verify
-  say "Done in $(( ($(date +%s) - START_TIME) / 60 )) min. The GPU server is live at $NGROK_URL"
+  if [ "${SKIP_NGROK:-}" = 1 ]; then
+    say "Done in $(( ($(date +%s) - START_TIME) / 60 )) min. Server is running; the tunnel was skipped."
+    echo "Open it later with:  NGROK_AUTHTOKEN=... bash $0 tunnel"
+  else
+    step_ngrok
+    say "Done in $(( ($(date +%s) - START_TIME) / 60 )) min. The GPU server is live at $NGROK_URL"
+  fi
   cat <<EOF
 
   status : bash $0 status         logs : $MS/logs/
