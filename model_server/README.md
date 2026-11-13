@@ -68,3 +68,31 @@ Open ports 8001-8003 on the GPU machine's firewall **only to the app server's IP
 
 - `tts_server.py` returns `pcm` (raw 16-bit mono, 24 kHz) by default, which is what Pipecat's OpenAI TTS service asks for. `wav` is also supported. `mp3`/`opus` are not.
 - `PRELOAD=true` loads Whisper and the Piper voice at startup so the first phone call is not slow.
+
+## A fresh rented GPU server in one command (E2E Networks T4, any Linux + NVIDIA GPU)
+
+`bootstrap_e2e.sh` sets up a brand-new machine from nothing and starts everything. Use it when
+you create a new instance and delete it when you are done (so you only pay while it exists).
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Mohammed-merchant/Kodera/main/model_server/bootstrap_e2e.sh -o bootstrap_e2e.sh
+MODEL_SERVER_API_KEY=the-key-from-the-VPS NGROK_AUTHTOKEN=your-ngrok-token bash bootstrap_e2e.sh
+```
+
+It installs the system packages, clones **only** `model_server`, builds the Python environment,
+downloads llama.cpp (CUDA 12.8), Qwen2.5 7B (4-bit), Whisper `small` and the Piper voice, writes
+`.env`, starts the server and opens `ngrok http 80 --url <your address>`. About 10 to 15
+minutes on a fresh machine; run it again after a failure and it resumes.
+
+| Command | What it does |
+|---|---|
+| `bash bootstrap_e2e.sh check` | tests every download link and the GPU, installs nothing |
+| `bash bootstrap_e2e.sh status` | processes, GPU, local and public health |
+| `bash bootstrap_e2e.sh start` / `stop` | restart or stop the server and tunnel |
+
+Options (environment variables): `LLM_SIZE=7b|3b`, `WHISPER_SIZE=small|base|medium|turbo`,
+`LLM_PARALLEL` (calls answered at once, default 2), `NGROK_URL`, `PORT`, `BASE`.
+
+Only one machine can use the ngrok address at a time: stop the tunnel on your laptop first.
+A T4 needs CUDA 12 builds (CUDA 13 builds dropped support for that GPU generation).
+On Windows laptops use `gpu_server.cmd start|stop|status` instead.

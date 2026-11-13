@@ -12,11 +12,11 @@ Run:  uvicorn gateway:app --port 8000   (run_all.py does this for you)
 from __future__ import annotations
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
-from common import env
+from common import env, require_key
 
 TARGETS = {
     "llm": f"http://127.0.0.1:{env('LLM_PORT', '8001')}",
@@ -45,10 +45,14 @@ async def health():
             out[name] = "up" if r.status_code < 500 and (name != "llm" or r.status_code in (200, 401)) else "error"
         except httpx.HTTPError:
             out[name] = "down"
-    return {"status": "ok" if all(v == "up" for v in out.values()) else "degraded", **out}
+    ok = all(v == "up" for v in out.values())
+    # 503 when anything is down: the call app checks this before answering a call, and
+    # ends the call at once instead of leaving the caller in silence.
+    return JSONResponse({"status": "ok" if ok else "degraded", **out}, status_code=200 if ok else 503)
 
 
-async def forward(request: Request):
+async def forward(request: Request, _key: None = Depends(require_key)):
+    # The key is checked here, so no route is open even if a backend does not check keys.
     target = ROUTES[request.url.path]
     req = client.build_request(
         request.method,

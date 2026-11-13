@@ -11,10 +11,12 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 from common import HERE, env
@@ -36,14 +38,82 @@ def llm_cmd() -> list[str]:
         sys.exit(f"Model file not found: {gguf_path}\nDownload it with: python download_models.py llm")
     cmd = [exe, "-m", str(gguf_path), "--host", HOST, "--port", env("LLM_PORT", "8001"),
            "-ngl", env("LLM_GPU_LAYERS", "99"), "-c", env("LLM_CTX", "2048"),
-           "--alias", env("LLM_ALIAS", "qwen"), "--jinja"]
+           "--alias", env("LLM_ALIAS", "qwen"), "--jinja",
+           # Gentle on a 4 GB laptop GPU: one conversation at a time (not 4 KV caches), small
+           # compute buffers, and a few CPU threads so the machine stays cool.
+           # LLM_PARALLEL = how many calls the LLM serves at once. The context (LLM_CTX) is
+           # shared between them: 2 calls of 4096 tokens need LLM_CTX=8192.
+           "-np", env("LLM_PARALLEL", "1"), "-b", env("LLM_BATCH", "512"),
+           "-ub", env("LLM_UBATCH", "256"),
+           "--threads", env("LLM_THREADS", "4")]
     if KEY:
         cmd += ["--api-key", KEY]
     return cmd
 
 
+def child_env(name: str) -> dict[str, str]:
+    """Linux: llama-server's CUDA libraries sit next to it (and in LLM_LIB_DIRS)."""
+    e = dict(os.environ)
+    if name == "llm":
+        exe = Path(env("LLAMA_SERVER_BIN", "llama-server"))
+        dirs = [str(exe.resolve().parent)] if exe.exists() else []
+        dirs += [d for d in env("LLM_LIB_DIRS").split(os.pathsep) if d]
+        e["LD_LIBRARY_PATH"] = os.pathsep.join(dirs + [e.get("LD_LIBRARY_PATH", "")]).strip(os.pathsep)
+    return e
+
+
 def uvicorn_cmd(module: str, port: str) -> list[str]:
     return [sys.executable, "-m", "uvicorn", f"{module}:app", "--host", HOST, "--port", port]
+
+
+# ---- GPU guard: stop everything rather than push a laptop GPU too hard ----
+MAX_TEMP_C = int(env("GPU_MAX_TEMP_C", "83"))
+MAX_MEM_PERCENT = int(env("GPU_MAX_MEM_PERCENT", "92"))
+GUARD_SECONDS = int(env("GUARD_INTERVAL_SECONDS", "10"))
+
+
+def gpu_reading() -> tuple[int, int, int] | None:
+    """(temperature C, memory used MiB, memory total MiB), or None if nvidia-smi is unavailable."""
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=temperature.gpu,memory.used,memory.total",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5, check=True,
+        ).stdout.strip().splitlines()[0]
+        temp, used, total = (int(x) for x in out.split(","))
+        return temp, used, total
+    except Exception:
+        return None
+
+
+def gpu_problem(reading: tuple[int, int, int] | None) -> str | None:
+    if reading is None:
+        return None
+    temp, used, total = reading
+    if temp >= MAX_TEMP_C:
+        return f"GPU temperature {temp} C is at or above the limit of {MAX_TEMP_C} C"
+    if used * 100 >= total * MAX_MEM_PERCENT:
+        return f"GPU memory {used}/{total} MiB is above {MAX_MEM_PERCENT}% of the card"
+    return None
+
+
+def wait_until_up(url: str, seconds: int, procs: dict[str, subprocess.Popen]) -> bool:
+    """Wait for a service to answer 200, so heavy model loads never overlap."""
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        for name, p in procs.items():
+            if p.poll() is not None:
+                sys.exit(f"[run_all] {name} exited with code {p.returncode} while starting")
+        problem = gpu_problem(gpu_reading())
+        if problem:
+            sys.exit(f"[run_all] STOPPING for safety: {problem}")
+        try:
+            if urllib.request.urlopen(url, timeout=3).status == 200:
+                return True
+        except Exception:
+            pass
+        time.sleep(3)
+    return False
 
 
 def main() -> None:
@@ -60,19 +130,42 @@ def main() -> None:
     if unknown:
         sys.exit(f"unknown service(s): {', '.join(sorted(unknown))}; choose from llm stt tts gateway")
 
+    start = gpu_reading()
+    if start and start[0] > MAX_TEMP_C - 10:
+        sys.exit(f"[run_all] The GPU is already at {start[0]} C. Let it cool below {MAX_TEMP_C - 10} C first.")
+    ready_urls = {  # a service counts as started when this answers 200
+        "llm": f"http://127.0.0.1:{env('LLM_PORT', '8001')}/health",
+        "stt": f"http://127.0.0.1:{env('STT_PORT', '8002')}/health",
+        "tts": f"http://127.0.0.1:{env('TTS_PORT', '8003')}/health",
+    }
     procs: dict[str, subprocess.Popen] = {}
     try:
-        # LLM first so its VRAM is reserved before Whisper loads.
+        # One at a time, LLM first: the heavy model loads never overlap on the GPU.
         for name in ("llm", "stt", "tts", "gateway"):
             if name in want:
                 cmd = plan[name]()
-                print(f"[run_all] starting {name}: {' '.join(c for c in cmd if c != KEY)}")
-                procs[name] = subprocess.Popen(cmd, cwd=HERE)
-                time.sleep(3 if name == "llm" else 1)
+                print(f"[run_all] starting {name}: {' '.join(c for c in cmd if c != KEY)}", flush=True)
+                procs[name] = subprocess.Popen(cmd, cwd=HERE, env=child_env(name))
+                if name in ready_urls:
+                    if not wait_until_up(ready_urls[name], 240, procs):
+                        sys.exit(f"[run_all] {name} did not become ready in 240 s; stopping")
+                    r = gpu_reading()
+                    print(f"[run_all] {name} ready. GPU: {r[0]} C, {r[1]}/{r[2]} MiB" if r else f"[run_all] {name} ready", flush=True)
+                else:
+                    time.sleep(1)
+        print("[run_all] all services are up; the guard checks the GPU every "
+              f"{GUARD_SECONDS} s (limits {MAX_TEMP_C} C, {MAX_MEM_PERCENT}% memory)", flush=True)
+        breaches, last_check = 0, 0.0
         while True:
             for name, p in procs.items():
                 if p.poll() is not None:
                     sys.exit(f"[run_all] {name} exited with code {p.returncode}; stopping the rest")
+            if time.time() - last_check >= GUARD_SECONDS:
+                last_check = time.time()
+                problem = gpu_problem(gpu_reading())
+                breaches = breaches + 1 if problem else 0
+                if breaches >= 2:  # two readings in a row, so one blip does not stop a call
+                    sys.exit(f"[run_all] STOPPING for safety: {problem}")
             time.sleep(2)
     except KeyboardInterrupt:
         pass

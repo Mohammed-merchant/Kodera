@@ -37,3 +37,7 @@ model_server/models/
 # Cal.diy: database dumps and the generated Caddy site
 calcom/backups/
 docker/conf.d/*.caddy
+
+# llama.cpp binaries for the GPU model server
+model_server/bin/
+model_server/logs/

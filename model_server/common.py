@@ -55,16 +55,39 @@ def add_cuda_dll_dirs() -> None:
     """Windows: make the CUDA DLLs installed by `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`
     findable. Without this, loading Whisper works but transcribing fails with
     "Library cublas64_12.dll is not found". Harmless elsewhere."""
-    if os.name != "nt":
-        return
     import glob
     import importlib.util
 
+    if os.name != "nt":
+        # Linux: load the libraries from `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`
+        # into the process first, so CTranslate2 (faster-whisper) finds them without
+        # LD_LIBRARY_PATH. Harmless if they are not installed (system CUDA is used then).
+        import ctypes
+
+        spec = importlib.util.find_spec("nvidia")
+        roots = list(spec.submodule_search_locations or []) if spec else []
+        for name in ("libcublasLt.so.12", "libcublas.so.12", "libcudnn.so.9"):
+            for root in roots:
+                for path in glob.glob(os.path.join(root, "*", "lib", name)):
+                    try:
+                        ctypes.CDLL(path, mode=ctypes.RTLD_GLOBAL)
+                    except OSError:
+                        pass
+        return
+
+    folders: list[str] = []
     spec = importlib.util.find_spec("nvidia")
     for root in list(spec.submodule_search_locations or []) if spec else []:
-        for folder in glob.glob(os.path.join(root, "*", "bin")):
-            os.add_dll_directory(folder)
-            os.environ["PATH"] = folder + os.pathsep + os.environ.get("PATH", "")
+        folders += glob.glob(os.path.join(root, "*", "bin"))
+    local_env = HERE / "bin" / "env" / "Library" / "bin"  # conda-forge CUDA libs (see README)
+    if local_env.is_dir():
+        folders.append(str(local_env))
+    torch_spec = importlib.util.find_spec("torch")  # a CUDA build of PyTorch carries cuBLAS/cuDNN
+    if torch_spec and torch_spec.submodule_search_locations:
+        folders += glob.glob(os.path.join(list(torch_spec.submodule_search_locations)[0], "lib"))
+    for folder in folders:
+        os.add_dll_directory(folder)
+        os.environ["PATH"] = folder + os.pathsep + os.environ.get("PATH", "")
 
 
 def gpu_info() -> dict | None:
