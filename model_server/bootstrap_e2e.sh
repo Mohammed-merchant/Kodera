@@ -12,7 +12,7 @@
 #   MODEL_SERVER_API_KEY=xxxx NGROK_AUTHTOKEN=yyyy bash bootstrap_e2e.sh
 # (anything not given as a variable is asked for; typing hides the secrets)
 #
-# Other commands:   bash bootstrap_e2e.sh check | status | start | stop
+# Other commands:   bash bootstrap_e2e.sh check | status | start | tunnel | stop
 #
 # Settings (environment variables, all optional):
 #   MODEL_SERVER_API_KEY  must equal LLM_API_KEY in the call app's .env on the VPS
@@ -21,6 +21,7 @@
 #   LLM_SIZE=7b|3b        Qwen2.5 Instruct, 4-bit (default 7b: better at booking; 3b is lighter)
 #   WHISPER_SIZE=small|base|medium|turbo   speech-to-text model (default small)
 #   LLM_PARALLEL          calls the LLM answers at once (default 2)
+#   SKIP_NGROK=1          set everything up and start the server, but do not open the tunnel yet
 #   PORT                  local gateway port, the one ngrok forwards (default 80, 8000 if not root)
 #   BASE                  where to put everything (default ~/kodera-gpu)
 #   BRANCH, REPO_URL, LLAMA_TAG   which code / llama.cpp build to use
@@ -264,14 +265,18 @@ step_verify() {
 
 cmd_setup() {
   ask MODEL_SERVER_API_KEY "MODEL_SERVER_API_KEY (the same value as LLM_API_KEY on the VPS)"
-  ask NGROK_AUTHTOKEN "NGROK_AUTHTOKEN"
+  [ "${SKIP_NGROK:-}" = 1 ] || ask NGROK_AUTHTOKEN "NGROK_AUTHTOKEN"
   step_system; step_code; step_python
   step_llama & local p1=$!
   step_models & local p2=$!
   wait "$p1" || die "llama.cpp setup failed"
   wait "$p2" || die "model download failed"
   LLAMA_DIR=$MS/bin/llama
-  step_env; step_server; step_ngrok; step_verify
+  step_env; step_server
+  if [ "${SKIP_NGROK:-}" = 1 ]; then
+    say "Tunnel skipped (SKIP_NGROK=1). Open it later: NGROK_AUTHTOKEN=... bash $0 tunnel"
+  else step_ngrok; fi
+  step_verify
   say "Done in $(( ($(date +%s) - START_TIME) / 60 )) min. The GPU server is live at $NGROK_URL"
   cat <<EOF
 
@@ -295,9 +300,10 @@ cmd_start() {
 case "${1:-setup}" in
   setup) cmd_setup ;;
   start) cmd_start ;;
+  tunnel) ask NGROK_AUTHTOKEN "NGROK_AUTHTOKEN"; PORT=$(grep -E '^GATEWAY_PORT=' "$MS/.env" | cut -d= -f2); NGROK_URL=$(grep -E '^NGROK_URL=' "$MS/.env" | cut -d= -f2); step_ngrok ;;
   stop) cmd_stop ;;
   status) cmd_status ;;
   check) cmd_check ;;
   -h|--help|help) sed -n '2,32p' "$0" ;;
-  *) die "unknown command '$1' (use: setup, start, stop, status, check)" ;;
+  *) die "unknown command '$1' (use: setup, start, tunnel, stop, status, check)" ;;
 esac
