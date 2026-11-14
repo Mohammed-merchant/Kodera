@@ -7,6 +7,29 @@ and a Pipecat voice pipeline. The STT, LLM and TTS models run on a separate GPU 
 **Status: scaffold only.** Only `/health` and `/ready` work so far. There is no call logic or AI
 logic yet. See [docs/architecture.md](docs/architecture.md) for the layers.
 
+## Laptop browser voice chat (no Docker or GPU)
+
+This separate demo uses Gnani Prisma/Timbre and a Groq-compatible LLM. Copy
+`voice.env.example` to `.env`, then fill in `GNANI_API_KEY` and `LLM_API_KEY`.
+If you already have a `.env`, back it up before replacing it. Provider usage
+may incur charges or be limited by your plan. Choose a Gnani voice that supports
+the selected language; the default Shivani may not support every language.
+
+From the repository root, open three terminals (install [uv](https://docs.astral.sh/uv/getting-started/installation/) first):
+
+```powershell
+uv run --no-project --with-requirements voice-requirements.txt uvicorn model_server.stt_server:app --host 127.0.0.1 --port 8002
+uv run --no-project --with-requirements voice-requirements.txt uvicorn model_server.tts_server:app --host 127.0.0.1 --port 8003
+uv run --no-project --with-requirements voice-requirements.txt uvicorn model_server.voice_chat:app --host 127.0.0.1 --port 8004
+```
+
+Open http://127.0.0.1:8004 in Chrome, allow microphone access, click **Click to
+Speak**, and click again to stop. Select English, Hindi, or Gujarati, or try
+auto-detect. Audio and transcripts are sent to Gnani and Groq; keep these
+unauthenticated demo servers bound to localhost. Microphone access requires
+localhost or HTTPS. The prior GPU STT/TTS servers have been replaced by the
+Gnani adapters; the remaining phone-agent configuration is separate.
+
 ## Project layout
 
 ```
