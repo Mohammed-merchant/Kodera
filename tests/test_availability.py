@@ -9,6 +9,7 @@ from app.business import appointments as appts
 from app.core.config import Settings
 from app.pipeline import greeting
 from app.pipeline.guards import SAFE_CHECK_FIRST, check_sentence
+from app.pipeline.guards import SAFE_SAY_AGAIN as SAY_AGAIN
 from app.pipeline.prompts import build_system_prompt
 from app.pipeline.tools import build_tools
 from tests.test_appointments import Factory, call, next_open_day
@@ -58,12 +59,33 @@ async def test_a_specific_time_can_be_checked(session_factory: Factory) -> None:
     await take(session_factory, at(day, "17:00"))
     tools = tools_for(session_factory)
     taken = await call(tools, "check_available_slots", date=day.isoformat(), time="5 PM")
-    assert taken["requested"]["free"] is False
-    near = [x["time"] for x in taken["requested"]["nearest_free"]]
-    assert near == ["12:45", "17:15", "17:30"] or "17:00" not in near
-    assert len(near) == 3
+    assert taken["time_is_free"] is False
+    assert "NOT free" in taken["answer"] and "5:15 PM, 5:30 PM, 5:45 PM" in taken["answer"]
     free = await call(tools, "check_available_slots", date=day.isoformat(), time="18:00")
-    assert free["requested"]["free"] is True
+    assert free["time_is_free"] is True and "IS FREE" in free["answer"]
+
+
+async def test_a_past_date_is_refused_with_todays_date(session_factory: Factory) -> None:
+    tools = tools_for(session_factory)
+    old = (SCHED.now().date() - timedelta(days=2)).isoformat()
+    check = await call(tools, "check_available_slots", date=old)
+    assert check["ok"] is False and "already passed" in check["message"]
+    booking = await call(
+        tools, "book_appointment", patient_name="Asha Rao", date=old, time="17:00", reason="x"
+    )
+    assert booking["ok"] is False and "already passed" in booking["message"]
+
+
+def test_the_prompt_has_a_calendar_of_real_dates() -> None:
+    prompt = build_system_prompt(BIG, SCHED.now())
+    today = SCHED.now()
+    assert f"{today:%Y-%m-%d} [today]" in prompt and "(clinic closed)" in prompt
+
+
+def test_a_tool_call_written_as_text_is_never_spoken() -> None:
+    for said in ('/book_appointment {"patient_name": "A"}', '{"date": "2026-11-16"}'):
+        spoken, why = check_sentence(said, booked=False, cancelled=False, checked=True)
+        assert spoken == SAY_AGAIN and why == "a tool call was written as text"
 
 
 async def test_a_refused_booking_brings_the_nearest_times_with_it(session_factory: Factory) -> None:

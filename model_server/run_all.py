@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -46,6 +47,9 @@ def llm_cmd() -> list[str]:
            "-np", env("LLM_PARALLEL", "1"), "-b", env("LLM_BATCH", "512"),
            "-ub", env("LLM_UBATCH", "256"),
            "--threads", env("LLM_THREADS", "4")]
+    if env("LLM_THINKING", "true").lower() == "false":  # Qwen3: answer at once, no hidden reasoning
+        cmd += ["--chat-template-kwargs", '{"enable_thinking":false}']
+    cmd += shlex.split(env("LLM_EXTRA_ARGS"))  # any other llama-server flags
     if KEY:
         cmd += ["--api-key", KEY]
     return cmd

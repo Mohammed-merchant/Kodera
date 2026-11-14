@@ -24,7 +24,7 @@ def create_llm(s: Settings) -> OpenAILLMService:
         api_key=s.llm_api_key.get_secret_value(),
         base_url=s.llm_base_url,
         settings=OpenAILLMService.Settings(
-            model=s.llm_model, temperature=0.3, max_tokens=s.llm_max_tokens
+            model=s.llm_model, temperature=0.0, max_tokens=s.llm_max_tokens
         ),
     )
 

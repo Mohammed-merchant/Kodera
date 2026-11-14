@@ -41,6 +41,9 @@ _kdir = Path(env("KOKORO_DIR", "models/kokoro"))
 KOKORO_DIR = _kdir if _kdir.is_absolute() else HERE / _kdir
 KOKORO_VOICE = env("KOKORO_VOICE", "af_heart")
 KOKORO_SPEED = float(env("KOKORO_SPEED", "1.0"))
+KOKORO_HINDI_VOICE = env("KOKORO_HINDI_VOICE", "hf_alpha")
+_mdir = Path(env("MMS_GUJARATI_DIR", "models/mms-guj"))  # Meta MMS-TTS, the Gujarati voice
+MMS_DIR = _mdir if _mdir.is_absolute() else HERE / _mdir
 _kokoro_files = (KOKORO_DIR / "kokoro-v1.0.onnx", KOKORO_DIR / "voices-v1.0.bin")
 ENGINE = env("TTS_ENGINE", "kokoro" if all(f.is_file() for f in _kokoro_files) else "piper")
 _VOICE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")  # blocks path traversal
@@ -67,11 +70,44 @@ def get_kokoro():
         return _kokoro
 
 
-def _synth_kokoro(text: str, voice: str) -> tuple[np.ndarray, int]:
+def detect_language(text: str) -> str:
+    """'hi' (Devanagari), 'gu' (Gujarati script) or 'en': the voice follows the script of the text."""
+    hindi = sum("ऀ" <= c <= "ॿ" for c in text)
+    gujarati = sum("઀" <= c <= "૿" for c in text)
+    if gujarati > hindi:
+        return "gu"
+    return "hi" if hindi else "en"
+
+
+def _synth_kokoro(text: str, voice: str, lang: str = "en-us") -> tuple[np.ndarray, int]:
     engine = get_kokoro()
     with _lock:
-        audio, sr = engine.create(text, voice=voice, speed=KOKORO_SPEED, lang="en-us")  # type: ignore[attr-defined]
+        audio, sr = engine.create(text, voice=voice, speed=KOKORO_SPEED, lang=lang)  # type: ignore[attr-defined]
     return audio.astype(np.float32), int(sr)
+
+
+_mms: tuple[object, object] | None = None
+
+
+def mms_available() -> bool:
+    return (MMS_DIR / "model.safetensors").is_file()
+
+
+def _synth_gujarati(text: str) -> tuple[np.ndarray, int]:
+    global _mms
+    import torch
+
+    with _lock:
+        if _mms is None:
+            from transformers import AutoTokenizer, VitsModel
+
+            log.info("loading MMS Gujarati from %s", MMS_DIR)
+            _mms = (VitsModel.from_pretrained(str(MMS_DIR)).eval(), AutoTokenizer.from_pretrained(str(MMS_DIR)))
+        model, tokenizer = _mms
+        inputs = tokenizer(text, return_tensors="pt")
+        with torch.no_grad():
+            wave = model(**inputs).waveform[0].numpy()  # type: ignore[operator]
+        return wave.astype(np.float32), int(model.config.sampling_rate)  # type: ignore[attr-defined]
 
 
 def get_voice(name: str):
@@ -94,6 +130,9 @@ async def lifespan(_: FastAPI):
     if env("PRELOAD", "true").lower() == "true" and ENGINE == "kokoro":
         await run_in_threadpool(get_kokoro)
         await run_in_threadpool(_synth_kokoro, "Warming up.", KOKORO_VOICE)  # first call is slow
+        await run_in_threadpool(_synth_kokoro, "नमस्ते।", KOKORO_HINDI_VOICE, "hi")
+        if mms_available():
+            await run_in_threadpool(_synth_gujarati, "નમસ્તે")
     elif env("PRELOAD", "true").lower() == "true":
         path = VOICE_DIR / f"{DEFAULT_VOICE}.onnx"
         if not path.is_file():
@@ -146,8 +185,14 @@ async def speech(req: SpeechRequest):
     t0 = time.perf_counter()
     if ENGINE == "kokoro":
         known = await run_in_threadpool(lambda: set(get_kokoro().get_voices()))  # type: ignore[attr-defined]
-        name = req.voice if req.voice in known else KOKORO_VOICE  # "alloy" etc. -> our voice
-        job = (_synth_kokoro, req.input, name)
+        language = detect_language(req.input)
+        if language == "gu" and mms_available():
+            name, job = "mms-guj", (_synth_gujarati, req.input)
+        elif language in ("hi", "gu"):  # no Gujarati voice installed: the Hindi one is the closest
+            name, job = KOKORO_HINDI_VOICE, (_synth_kokoro, req.input, KOKORO_HINDI_VOICE, language)
+        else:
+            name = req.voice if req.voice in known else KOKORO_VOICE  # "alloy" etc. -> our voice
+            job = (_synth_kokoro, req.input, name)
     else:
         name = req.voice if (req.voice and (VOICE_DIR / f"{req.voice}.onnx").is_file()) else DEFAULT_VOICE
         job = (_synth, await run_in_threadpool(get_voice, name), req.input)

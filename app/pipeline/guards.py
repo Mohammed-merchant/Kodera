@@ -25,6 +25,12 @@ log = structlog.get_logger(__name__)
 SAFE_NOT_BOOKED = "I have not booked that yet. Which day would you like to come in?"
 SAFE_NOT_CANCELLED = "I have not cancelled anything yet. Could you tell me the appointment date?"
 SAFE_CHECK_FIRST = "Let me check the schedule for you."
+SAFE_SAY_AGAIN = "Sorry, could you say that once more?"
+# A small model sometimes writes a tool call as plain text instead of making it. Never speak that.
+_TOOL_LEAK = re.compile(
+    r"(^/?(check_available_slots|book_appointment|cancel_appointment|my_appointments)"
+    r"|<tool_call>|\{\s*\"[a-z_]+\"\s*:)"
+)
 SAFE_NO_ADVICE = "I am sorry, I cannot give medical advice. The doctor will guide you at the visit."
 
 _APPOINTMENT = r"(?:appointment|booking|slot|visit|consultation|reservation)"
@@ -77,6 +83,8 @@ def check_sentence(
     plain = sentence.strip()
     if _ADVICE.search(plain):
         return SAFE_NO_ADVICE, "medical advice"
+    if _TOOL_LEAK.search(plain):
+        return SAFE_SAY_AGAIN, "a tool call was written as text"
     negated = bool(_NEGATION.search(plain))
     if not booked and not negated and _CLAIM_BOOKED.search(plain):
         return SAFE_NOT_BOOKED, "claimed a booking that was not made"
@@ -117,6 +125,7 @@ class ReplyGuard(FrameProcessor):
                 SAFE_NO_ADVICE,
                 SAFE_NOT_BOOKED,
                 SAFE_CHECK_FIRST,
+                SAFE_SAY_AGAIN,
             ):
                 return
             self._replaced_this_reply = True

@@ -18,7 +18,7 @@
 #   MODEL_SERVER_API_KEY  must equal LLM_API_KEY in the call app's .env on the VPS
 #   NGROK_AUTHTOKEN       your ngrok account token (dashboard.ngrok.com/get-started/your-authtoken)
 #   NGROK_URL             tunnel address        (default https://compel-dissuade-subheader.ngrok-free.dev)
-#   LLM_SIZE=7b|3b        Qwen2.5 Instruct, 4-bit (default 7b: better at booking; 3b is lighter)
+#   LLM_SIZE=qwen3-8b|7b|3b  4-bit LLM (default qwen3-8b: Hindi/Gujarati + reliable booking; 7b/3b = Qwen2.5)
 #   WHISPER_SIZE=small|base|medium|turbo   speech-to-text model (default small)
 #   LLM_PARALLEL          calls the LLM answers at once (default 2)
 #   SKIP_NGROK=1          set everything up and start the server, but do not open the tunnel yet
@@ -36,8 +36,8 @@ BASE=${BASE:-$HOME/kodera-gpu}
 REPO_DIR=$BASE/Kodera
 MS=$REPO_DIR/model_server
 NGROK_URL=${NGROK_URL:-https://compel-dissuade-subheader.ngrok-free.dev}
-LLM_SIZE=${LLM_SIZE:-7b}
-WHISPER_SIZE=${WHISPER_SIZE:-small}
+LLM_SIZE=${LLM_SIZE:-qwen3-8b}
+WHISPER_SIZE=${WHISPER_SIZE:-turbo}   # turbo: far better Hindi/Gujarati than small
 LLM_PARALLEL=${LLM_PARALLEL:-2}
 LLAMA_TAG=${LLAMA_TAG:-b12360}
 PORT=${PORT:-80}
@@ -59,13 +59,16 @@ if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo"; [ "$PORT" -lt 1024 ] &&
 
 # ---- which model files for the chosen sizes ----
 case "$LLM_SIZE" in
+  qwen3-8b) LLM_REPO=Qwen/Qwen3-8B-GGUF   # understands Hindi/Gujarati and calls tools reliably
+      LLM_FILES=(Qwen3-8B-Q4_K_M.gguf)
+      LLM_FIRST=${LLM_FILES[0]}; LLM_CTX=${LLM_CTX:-$((4096 * LLM_PARALLEL))} ;;
   7b) LLM_REPO=Qwen/Qwen2.5-7B-Instruct-GGUF
       LLM_FILES=(qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf qwen2.5-7b-instruct-q4_k_m-00002-of-00002.gguf)
       LLM_FIRST=${LLM_FILES[0]}; LLM_CTX=${LLM_CTX:-$((4096 * LLM_PARALLEL))} ;;
   3b) LLM_REPO=Qwen/Qwen2.5-3B-Instruct-GGUF
       LLM_FILES=(qwen2.5-3b-instruct-q4_k_m.gguf)
       LLM_FIRST=${LLM_FILES[0]}; LLM_CTX=${LLM_CTX:-$((4096 * LLM_PARALLEL))} ;;
-  *) die "LLM_SIZE must be 7b or 3b" ;;
+  *) die "LLM_SIZE must be qwen3-8b, 7b or 3b" ;;
 esac
 case "$WHISPER_SIZE" in
   tiny|base|small|medium) W_REPO=Systran/faster-whisper-$WHISPER_SIZE
@@ -178,6 +181,9 @@ step_python() {
   "$MS/.venv/bin/pip" install -q -r "$MS/requirements.txt" nvidia-cublas-cu12 nvidia-cudnn-cu12
   # Kokoro voice on the GPU. onnxruntime-gpu 1.22 is the last one built for CUDA 12 (newer wants 13).
   "$MS/.venv/bin/pip" install -q kokoro-onnx "onnxruntime-gpu==1.22.0"
+  # Gujarati voice (Meta MMS-TTS) runs on the CPU with the small CPU build of PyTorch.
+  "$MS/.venv/bin/pip" install -q torch --index-url https://download.pytorch.org/whl/cpu
+  "$MS/.venv/bin/pip" install -q transformers
 }
 
 step_llama() {
@@ -206,6 +212,9 @@ step_models() {
   # The natural voice. If these two cannot be downloaded the server falls back to Piper.
   dl "$KOKORO_BASE/kokoro-v1.0.onnx" "$MS/models/kokoro/kokoro-v1.0.onnx" || warn "Kokoro model not downloaded: using Piper"
   dl "$KOKORO_BASE/voices-v1.0.bin" "$MS/models/kokoro/voices-v1.0.bin" || warn "Kokoro voices not downloaded: using Piper"
+  for f in config.json model.safetensors vocab.json tokenizer_config.json special_tokens_map.json; do
+    dl "$HF/facebook/mms-tts-guj/resolve/main/$f" "$MS/models/mms-guj/$f" || warn "Gujarati voice file $f missing"
+  done
 }
 
 step_env() {
@@ -220,6 +229,7 @@ NGROK_URL=$NGROK_URL
 PRELOAD=true
 LLAMA_SERVER_BIN=$MS/bin/llama/llama-server
 LLM_GGUF=$MS/models/llm/$LLM_FIRST
+LLM_THINKING=false
 LLM_ALIAS=qwen
 LLM_PORT=8001
 LLM_CTX=$LLM_CTX
@@ -232,12 +242,14 @@ WHISPER_MODEL=$MS/models/whisper/$W_DIR
 WHISPER_DEVICE=cuda
 WHISPER_COMPUTE_TYPE=int8_float16
 WHISPER_BEAM_SIZE=3
-WHISPER_PROMPT=Clinic appointment booking. Times like 11:15 AM and 5:30 PM. Dates like Thursday 12 November.
+WHISPER_PROMPT=Clinic appointment booking call. Words: appointment, reschedule, cancel, consultation, fees.
+WHISPER_LANGUAGES=en,hi,gu
 TTS_PORT=8003
 PIPER_VOICE=en_US-lessac-medium
 PIPER_VOICE_DIR=$MS/models/piper
 KOKORO_DIR=$MS/models/kokoro
 KOKORO_VOICE=af_heart
+KOKORO_HINDI_VOICE=hf_alpha
 GPU_MAX_TEMP_C=85
 GPU_MAX_MEM_PERCENT=92
 EOF

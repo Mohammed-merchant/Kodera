@@ -4,8 +4,10 @@ Each tool answers with a small dict. The `message` field is plain words the agen
 The agent must only confirm a booking after the tool returned ok=True.
 """
 
+import difflib
 import functools
 import inspect
+import re
 from datetime import datetime
 from typing import Any
 
@@ -38,6 +40,28 @@ def build_tools(
 
     def bad(message: str) -> dict[str, Any]:
         return {"ok": False, "message": message}
+
+    def name_was_heard(name: str) -> bool:
+        """Did the caller actually say this name? A small model likes to invent one ("Rajesh").
+        Spelling from speech-to-text varies, so a close match is enough. Names written in another
+        script than what the caller spoke cannot be compared, so those pass."""
+        if recorder is None or not hasattr(recorder, "caller_words"):
+            return True
+        heard: set[str] = recorder.caller_words
+        tokens = [t for t in re.findall(r"\w+", name.lower()) if len(t) >= 2]
+        if not tokens or not heard:
+            return False
+        spoken = [h for h in heard if h.isascii() == tokens[0].isascii()]
+        if not spoken:
+            return True  # e.g. caller spoke Hindi, name written in English letters
+        return any(difflib.get_close_matches(t, spoken, n=1, cutoff=0.6) for t in tokens)
+
+    def past_day(day: Any) -> dict[str, Any]:
+        today = sched.now()
+        return bad(
+            f"{day:%A} {day.day} {day:%B} has already passed. Today is {today:%A} {today.day} "
+            f"{today:%B}. Ask the caller which day they mean, and use the CALENDAR dates."
+        )
 
     def guarded(fn: Any) -> Any:
         """If a tool breaks (database down...), tell the agent so it never invents an answer."""
@@ -74,6 +98,8 @@ def build_tools(
         day = appts.parse_day(date, sched)
         if day is None:
             return await params.result_callback(bad("Ask the caller for a clear date."))
+        if day < sched.now().date():
+            return await params.result_callback(past_day(day))
         free = await backend.free_slots(day)
         if recorder is not None:
             recorder.checked = True  # the agent has looked: it may now talk about availability
@@ -94,15 +120,17 @@ def build_tools(
         clock = appts.parse_clock(time) if time else None
         if clock is not None:
             wanted = datetime.combine(day, clock, tzinfo=sched.tz)
-            result["requested"] = {
-                "time": f"{clock:%H:%M}",
-                "free": wanted in free,
-                "nearest_free": [
-                    {"time": f"{x:%H:%M}", "say": appts.clock_label(x, sched)}
-                    for x in appts.nearest(free, wanted, 3)
-                    if x != wanted
-                ],
-            }
+            label = appts.clock_label(wanted, sched)
+            near = [
+                appts.clock_label(x, sched) for x in appts.nearest(free, wanted, 3) if x != wanted
+            ]
+            if wanted in free:
+                answer = f"{label} on {day:%A} IS FREE. Ask for the patient's name and the reason."
+            else:
+                answer = f"{label} on {day:%A} is NOT free. Nearest free times: {', '.join(near)}."
+            # A short, plain answer first: small models misread long lists.
+            result = {"ok": True, "date": day.isoformat(), "time": f"{clock:%H:%M}",
+                      "time_is_free": wanted in free, "answer": answer}  # fmt: skip
         await params.result_callback(result)
 
     @guarded
@@ -125,13 +153,21 @@ def build_tools(
         """
         day = appts.parse_day(date, sched)
         clock = appts.parse_clock(time)
-        phone = appts.normalize_phone(phone_number) or caller_phone
+        # The caller's own number (from the call) wins: models invent numbers like 1234567890.
+        phone = caller_phone or appts.normalize_phone(phone_number)
         if day is None or clock is None:
             return await params.result_callback(bad("The date or time was not clear. Ask again."))
+        if day < sched.now().date():
+            return await params.result_callback(past_day(day))
         if phone is None:
             return await params.result_callback(bad("Ask the caller for their phone number."))
-        if len(patient_name.strip()) < 2:
-            return await params.result_callback(bad("Ask for the patient's name."))
+        if len(patient_name.strip()) < 2 or not name_was_heard(patient_name):
+            return await params.result_callback(
+                bad(
+                    "The caller has not told you the patient's name yet. Ask: May I have your "
+                    "name? Wait for the answer. Never invent a name."
+                )
+            )
         slot = datetime.combine(day, clock, tzinfo=sched.tz)
         outcome = await backend.book(
             name=patient_name,

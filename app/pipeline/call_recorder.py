@@ -12,6 +12,7 @@ Postgres in one go. If that fails the data stays in Redis and a background job r
 import asyncio
 import contextlib
 import json
+import re
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -49,6 +50,7 @@ class CallRecorder:
         self.booked = False
         self.cancelled = False
         self.checked = False  # did the agent look at the schedule yet?
+        self.caller_words: set[str] = set()  # what the caller said, to check names
         self._queue: asyncio.Queue[tuple[str, Callable[[], Awaitable[Any]]]] = asyncio.Queue()
         self._worker: asyncio.Task[None] | None = None
 
@@ -103,6 +105,8 @@ class CallRecorder:
     async def add_turn(self, role: str, text: str, **timings: int | None) -> None:
         if not text.strip():
             return
+        if role == "caller":
+            self.caller_words |= set(re.findall(r"\w+", text.lower()))
         item: dict[str, Any] = {"role": role, "text": text.strip(), "at": _now()}
         item.update({k: v for k, v in timings.items() if v is not None})
         self._enqueue("turn", self._push(self.turns_key, item))
