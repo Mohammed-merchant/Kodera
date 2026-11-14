@@ -181,7 +181,7 @@ async def test_a_slot_lost_in_a_race_is_reported_and_not_mirrored(
 
     cal.taken.add(_utc(cal.slot_starts()[0]))
     backend.client.slots = stale  # type: ignore[method-assign]
-    backend.free_slots = lambda d: _async([slot(cal, "10:00")])  # type: ignore[method-assign]
+    backend.free_slots = lambda d, lead_minutes=None: _async([slot(cal, "10:00")])  # type: ignore[method-assign]
     outcome = await backend.book(name="Asha Rao", phone="9876543210", slot=slot(cal, "10:00"),
                                  reason="", call_sid="")  # fmt: skip
     assert not outcome.ok and "just taken" in outcome.message
@@ -350,7 +350,7 @@ async def test_the_agent_books_and_cancels_through_cal(
                         call_sid="CA9", recorder=rec, backend=backend)  # fmt: skip
     day = cal.day
     slots = await call(tools, "check_available_slots", date=day)
-    assert slots["ok"] and [s["time"] for s in slots["free_slots"]][:2] == ["10:00", "10:15"]
+    assert slots["ok"] and slots["free_times"][:2] == ["10:00", "10:15"]
     booked = await call(tools, "book_appointment", patient_name="Asha Rao", date=day,
                         time="10:00", reason="fever")  # fmt: skip
     assert booked["ok"] and rec.booked  # the reply guard may now allow "booked"

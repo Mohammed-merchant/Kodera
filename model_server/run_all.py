@@ -59,6 +59,16 @@ def child_env(name: str) -> dict[str, str]:
         dirs = [str(exe.resolve().parent)] if exe.exists() else []
         dirs += [d for d in env("LLM_LIB_DIRS").split(os.pathsep) if d]
         e["LD_LIBRARY_PATH"] = os.pathsep.join(dirs + [e.get("LD_LIBRARY_PATH", "")]).strip(os.pathsep)
+    elif name == "tts" and os.name != "nt":
+        # Kokoro runs on onnxruntime-gpu, which needs the CUDA 12 libraries from the pip packages
+        # nvidia-cublas-cu12 / nvidia-cudnn-cu12 (cuFFT/cuRAND/CUDA runtime come with them).
+        import glob
+        import importlib.util
+
+        spec = importlib.util.find_spec("nvidia")
+        roots = list(spec.submodule_search_locations or []) if spec else []
+        libs = [d for r in roots for d in sorted(glob.glob(os.path.join(r, "*", "lib")))]
+        e["LD_LIBRARY_PATH"] = os.pathsep.join(libs + [e.get("LD_LIBRARY_PATH", "")]).strip(os.pathsep)
     return e
 
 

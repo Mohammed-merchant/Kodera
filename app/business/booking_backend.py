@@ -28,7 +28,7 @@ class BookingBackend(Protocol):
 
     def is_closed(self, day: date) -> bool: ...
 
-    async def free_slots(self, day: date) -> list[datetime]: ...
+    async def free_slots(self, day: date, lead_minutes: int | None = None) -> list[datetime]: ...
 
     async def book(
         self, *, name: str, phone: str, slot: datetime, reason: str, call_sid: str
@@ -48,8 +48,8 @@ class LocalBackend:
     def is_closed(self, day: date) -> bool:
         return day.weekday() not in self.sched.open_days
 
-    async def free_slots(self, day: date) -> list[datetime]:
-        return await appts.free_slots(self.factory, self.sched, day)
+    async def free_slots(self, day: date, lead_minutes: int | None = None) -> list[datetime]:
+        return await appts.free_slots(self.factory, self.sched, day, lead_minutes)
 
     async def book(
         self, *, name: str, phone: str, slot: datetime, reason: str, call_sid: str
@@ -81,8 +81,9 @@ class CalBackend:
     def is_closed(self, day: date) -> bool:
         return False  # Cal.diy knows the doctor's schedule; "no slots" is the only signal
 
-    async def free_slots(self, day: date) -> list[datetime]:
-        earliest = self.sched.now().timestamp() + MIN_LEAD_MINUTES * 60
+    async def free_slots(self, day: date, lead_minutes: int | None = None) -> list[datetime]:
+        lead = MIN_LEAD_MINUTES if lead_minutes is None else lead_minutes
+        earliest = self.sched.now().timestamp() + lead * 60
         slots = await self.client.slots(day)
         return [
             s.astimezone(self.sched.tz)
@@ -94,8 +95,8 @@ class CalBackend:
         self, *, name: str, phone: str, slot: datetime, reason: str, call_sid: str
     ) -> Outcome:
         day = slot.astimezone(self.sched.tz).date()
-        if slot not in await self.free_slots(day):  # also keeps us on Cal.diy's own slot grid
-            return Outcome(False, "That time is not available. Please check the free slots again.")
+        if slot not in await self.free_slots(day, lead_minutes=0):  # keeps us on Cal.diy's grid
+            return Outcome(False, "That time is not available.")
         try:
             booking = await self.client.create_booking(
                 start=slot,

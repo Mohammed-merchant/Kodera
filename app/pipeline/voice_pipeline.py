@@ -193,7 +193,16 @@ async def run_call(
     @llm.event_handler("on_function_calls_started")  # type: ignore[untyped-decorator]
     async def _filler(_service: Any, _calls: Any) -> None:
         # Looking up slots takes a moment; fill the silence so the caller knows we heard.
-        await tts.queue_frame(TTSSpeakFrame("One moment, let me check."))
+        # The audio is ready-made, so it plays at once (no round trip to the voice server).
+        ready = greeting_audio.cached_text(greeting_audio.FILLER)
+        if ready:
+            await tts.queue_frame(
+                TTSAudioRawFrame(
+                    audio=ready, sample_rate=greeting_audio.SAMPLE_RATE, num_channels=1
+                )
+            )
+        else:
+            await tts.queue_frame(TTSSpeakFrame(greeting_audio.FILLER))
 
     @transport.event_handler("on_client_disconnected")  # type: ignore[untyped-decorator]
     async def _hangup(_transport: Any, _client: Any) -> None:

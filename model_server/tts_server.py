@@ -1,11 +1,13 @@
-"""GPU-machine text-to-speech server (Piper), OpenAI-compatible.
+"""GPU-machine text-to-speech server, OpenAI-compatible. Engines: Kokoro (default when its files
+exist; a natural, warm voice that runs on the GPU) or Piper (CPU, the fallback).
 
     POST /v1/audio/speech   {model, input, voice, response_format: "pcm" | "wav"}
     GET  /health
 
 `pcm` is raw 16-bit little-endian mono at 24000 Hz, exactly what OpenAI's API (and Pipecat's
 OpenAI TTS service) uses. `wav` keeps the voice's native sample rate.
-Piper itself runs on CPU and is fast enough for real-time phone calls; it costs no VRAM.
+Kokoro-82M is small (about 0.3 GB of VRAM) and speaks a short sentence in ~250 ms on a T4.
+Piper runs on CPU, costs no VRAM and is the fallback if Kokoro is not installed.
 
 Run:  uvicorn tts_server:app --host 0.0.0.0 --port 8003   (from the model_server folder)
 """
@@ -13,6 +15,7 @@ Run:  uvicorn tts_server:app --host 0.0.0.0 --port 8003   (from the model_server
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
 import time
@@ -34,10 +37,41 @@ DEFAULT_VOICE = env("PIPER_VOICE", "en_US-lessac-medium")
 _dir = Path(env("PIPER_VOICE_DIR", "models/piper"))
 VOICE_DIR = _dir if _dir.is_absolute() else HERE / _dir  # relative paths are from this folder
 PCM_RATE = 24_000
+_kdir = Path(env("KOKORO_DIR", "models/kokoro"))
+KOKORO_DIR = _kdir if _kdir.is_absolute() else HERE / _kdir
+KOKORO_VOICE = env("KOKORO_VOICE", "af_heart")
+KOKORO_SPEED = float(env("KOKORO_SPEED", "1.0"))
+_kokoro_files = (KOKORO_DIR / "kokoro-v1.0.onnx", KOKORO_DIR / "voices-v1.0.bin")
+ENGINE = env("TTS_ENGINE", "kokoro" if all(f.is_file() for f in _kokoro_files) else "piper")
 _VOICE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")  # blocks path traversal
 
 _voices: dict[str, object] = {}
 _lock = threading.Lock()
+_kokoro: object | None = None
+
+
+def get_kokoro():
+    """Load Kokoro once. It uses the GPU when onnxruntime-gpu can find CUDA, else the CPU."""
+    global _kokoro
+    with _lock:
+        if _kokoro is None:
+            import onnxruntime
+
+            if "CUDAExecutionProvider" in onnxruntime.get_available_providers():
+                os.environ.setdefault("ONNX_PROVIDER", "CUDAExecutionProvider")  # else it uses the CPU
+            from kokoro_onnx import Kokoro
+
+            log.info("loading Kokoro from %s", KOKORO_DIR)
+            _kokoro = Kokoro(str(_kokoro_files[0]), str(_kokoro_files[1]))
+            log.info("Kokoro providers: %s", _kokoro.sess.get_providers())  # type: ignore[attr-defined]
+        return _kokoro
+
+
+def _synth_kokoro(text: str, voice: str) -> tuple[np.ndarray, int]:
+    engine = get_kokoro()
+    with _lock:
+        audio, sr = engine.create(text, voice=voice, speed=KOKORO_SPEED, lang="en-us")  # type: ignore[attr-defined]
+    return audio.astype(np.float32), int(sr)
 
 
 def get_voice(name: str):
@@ -57,7 +91,10 @@ def get_voice(name: str):
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    if env("PRELOAD", "true").lower() == "true":
+    if env("PRELOAD", "true").lower() == "true" and ENGINE == "kokoro":
+        await run_in_threadpool(get_kokoro)
+        await run_in_threadpool(_synth_kokoro, "Warming up.", KOKORO_VOICE)  # first call is slow
+    elif env("PRELOAD", "true").lower() == "true":
         path = VOICE_DIR / f"{DEFAULT_VOICE}.onnx"
         if not path.is_file():
             raise RuntimeError(
@@ -95,7 +132,8 @@ def _synth(voice, text: str) -> tuple[np.ndarray, int]:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "default_voice": DEFAULT_VOICE, "loaded_voices": sorted(_voices),
+    return {"status": "ok", "engine": ENGINE,
+            "default_voice": KOKORO_VOICE if ENGINE == "kokoro" else DEFAULT_VOICE, "loaded_voices": sorted(_voices),
             "voice_dir": str(VOICE_DIR),
             "voices_on_disk": sorted(p.stem for p in VOICE_DIR.glob("*.onnx")) if VOICE_DIR.is_dir() else [],
             "gpu": gpu_info()}
@@ -105,12 +143,16 @@ def health():
 async def speech(req: SpeechRequest):
     if req.response_format not in {"pcm", "wav"}:
         raise HTTPException(400, "response_format must be 'pcm' or 'wav'")
-    name = req.voice if (req.voice and (VOICE_DIR / f"{req.voice}.onnx").is_file()) else DEFAULT_VOICE
-    voice = await run_in_threadpool(get_voice, name)
-
     t0 = time.perf_counter()
+    if ENGINE == "kokoro":
+        known = await run_in_threadpool(lambda: set(get_kokoro().get_voices()))  # type: ignore[attr-defined]
+        name = req.voice if req.voice in known else KOKORO_VOICE  # "alloy" etc. -> our voice
+        job = (_synth_kokoro, req.input, name)
+    else:
+        name = req.voice if (req.voice and (VOICE_DIR / f"{req.voice}.onnx").is_file()) else DEFAULT_VOICE
+        job = (_synth, await run_in_threadpool(get_voice, name), req.input)
     try:
-        audio, sr = await run_in_threadpool(_synth, voice, req.input)
+        audio, sr = await run_in_threadpool(*job)
     except HTTPException:
         raise
     except Exception as exc:

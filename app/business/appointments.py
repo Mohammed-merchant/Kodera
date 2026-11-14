@@ -96,12 +96,42 @@ def normalize_phone(raw: str) -> str | None:
 # ---------- saying it back ----------
 
 
-def speak_slot(slot: datetime, sched: Schedule) -> str:
+def clock_label(slot: datetime, sched: Schedule) -> str:
+    """'5 PM' or '5:15 PM': how a person says the time."""
     local = slot.astimezone(sched.tz)
     hour12 = local.hour % 12 or 12
     suffix = "AM" if local.hour < 12 else "PM"
-    clock = f"{hour12}:{local.minute:02d} {suffix}" if local.minute else f"{hour12} {suffix}"
-    return f"{local:%A} {local.day} {local:%B} at {clock}"
+    return f"{hour12}:{local.minute:02d} {suffix}" if local.minute else f"{hour12} {suffix}"
+
+
+def speak_slot(slot: datetime, sched: Schedule) -> str:
+    local = slot.astimezone(sched.tz)
+    return f"{local:%A} {local.day} {local:%B} at {clock_label(slot, sched)}"
+
+
+def spoken_ranges(slots: list[datetime], sched: Schedule) -> str:
+    """The free start times as short ranges: '10 AM to 12:45 PM and 5 PM to 7:45 PM'.
+    A taken slot in the middle splits a range, so what is said is always exact."""
+    step = timedelta(minutes=sched.slot_minutes)
+    groups: list[list[datetime]] = []
+    for s in sorted(slots):
+        if groups and s - groups[-1][-1] == step:
+            groups[-1].append(s)
+        else:
+            groups.append([s])
+    parts = [
+        clock_label(g[0], sched)
+        if len(g) == 1
+        else f"{clock_label(g[0], sched)} to {clock_label(g[-1], sched)}"
+        for g in groups
+    ]
+    return " and ".join(parts)
+
+
+def nearest(slots: list[datetime], target: datetime, count: int = 3) -> list[datetime]:
+    """The free slots closest to the wanted time, in time order."""
+    closest = sorted(slots, key=lambda s: (abs((s - target).total_seconds()), s))[:count]
+    return sorted(closest)
 
 
 def describe_hours(sched: Schedule, s: Settings) -> str:
@@ -145,12 +175,17 @@ async def _booked_between(session: AsyncSession, start: datetime, end: datetime)
 
 
 async def free_slots(
-    factory: async_sessionmaker[AsyncSession], sched: Schedule, day: date
+    factory: async_sessionmaker[AsyncSession],
+    sched: Schedule,
+    day: date,
+    lead_minutes: int | None = None,
 ) -> list[datetime]:
+    """Free slots of a day. `lead_minutes`: how far ahead a slot must be (default 15)."""
     slots = slots_on(sched, day)
     if not slots:
         return []
-    earliest = sched.now() + timedelta(minutes=MIN_LEAD_MINUTES)
+    lead = MIN_LEAD_MINUTES if lead_minutes is None else lead_minutes
+    earliest = sched.now() + timedelta(minutes=lead)
     async with factory() as session:
         # Compare in UTC, the way times are stored (SQLite compares plain text).
         taken = await _booked_between(
@@ -174,8 +209,9 @@ async def book(
     reason: str,
     call_sid: str,
 ) -> Outcome:
-    if slot not in await free_slots(factory, sched, slot.date()):
-        return Outcome(False, "That time is not available. Please check the free slots again.")
+    # Lead 0: a slot offered a minute ago must still be bookable while the caller decides.
+    if slot not in await free_slots(factory, sched, slot.date(), lead_minutes=0):
+        return Outcome(False, "That time is not available.")
     async with factory() as session:
         session.add(
             Appointment(

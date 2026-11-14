@@ -141,7 +141,7 @@ async def test_tools_book_flow(session_factory: Factory) -> None:
     day = next_open_day().isoformat()
 
     slots = await call(tools, "check_available_slots", date=day)
-    assert slots["ok"] and slots["free_slots"][0]["time"] == "10:00"
+    assert slots["ok"] and slots["free_times"][0] == "10:00"
 
     args = {"patient_name": "Asha Rao", "date": day, "time": "10:00", "reason": "fever"}
     assert (await call(tools, "book_appointment", **args))["ok"]
@@ -173,7 +173,7 @@ async def test_a_broken_tool_tells_the_agent_not_to_promise(session_factory: Fac
             raise RuntimeError("database is down")
 
     tools = build_tools(SETTINGS, BrokenFactory(), caller_number="9876543210", call_sid="CA1")  # type: ignore[arg-type]
-    result = await call(tools, "check_available_slots", date="tomorrow")
+    result = await call(tools, "check_available_slots", date=next_open_day().isoformat())
     assert not result["ok"] and "do not promise" in result["message"]
 
 

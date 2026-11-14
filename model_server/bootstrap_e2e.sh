@@ -48,6 +48,7 @@ CUDART_TGZ=cudart-llama-$LLAMA_TAG-bin-ubuntu-cuda-12.8-x64.tar.gz # CUDA runtim
 NGROK_TGZ=https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
 HF=https://huggingface.co
 PIPER_BASE=$HF/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium
+KOKORO_BASE=https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0
 
 say()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33mWARNING: %s\033[0m\n' "$*" >&2; }
@@ -140,6 +141,8 @@ cmd_stop() {
   pkill -x ngrok 2>/dev/null && echo "stopped ngrok" || true
   pkill -f run_all.py 2>/dev/null && echo "stopped model server" || true
   sleep 2; pkill -f llama-server 2>/dev/null || true
+  pkill -f "uvicorn (stt_server|tts_server|gateway):app" 2>/dev/null || true  # children outlive run_all
+  sleep 1
   echo "GPU : $(gpu_line)"
 }
 
@@ -173,6 +176,8 @@ step_python() {
   [ -x "$MS/.venv/bin/python" ] || python3 -m venv "$MS/.venv"
   "$MS/.venv/bin/pip" install -q -U pip
   "$MS/.venv/bin/pip" install -q -r "$MS/requirements.txt" nvidia-cublas-cu12 nvidia-cudnn-cu12
+  # Kokoro voice on the GPU. onnxruntime-gpu 1.22 is the last one built for CUDA 12 (newer wants 13).
+  "$MS/.venv/bin/pip" install -q kokoro-onnx "onnxruntime-gpu==1.22.0"
 }
 
 step_llama() {
@@ -198,6 +203,9 @@ step_models() {
   for f in "${W_FILES[@]}"; do dl "$HF/$W_REPO/resolve/main/$f" "$MS/models/whisper/$W_DIR/$f"; done
   dl "$PIPER_BASE/en_US-lessac-medium.onnx" "$MS/models/piper/en_US-lessac-medium.onnx"
   dl "$PIPER_BASE/en_US-lessac-medium.onnx.json" "$MS/models/piper/en_US-lessac-medium.onnx.json"
+  # The natural voice. If these two cannot be downloaded the server falls back to Piper.
+  dl "$KOKORO_BASE/kokoro-v1.0.onnx" "$MS/models/kokoro/kokoro-v1.0.onnx" || warn "Kokoro model not downloaded: using Piper"
+  dl "$KOKORO_BASE/voices-v1.0.bin" "$MS/models/kokoro/voices-v1.0.bin" || warn "Kokoro voices not downloaded: using Piper"
 }
 
 step_env() {
@@ -228,6 +236,8 @@ WHISPER_PROMPT=Clinic appointment booking. Times like 11:15 AM and 5:30 PM. Date
 TTS_PORT=8003
 PIPER_VOICE=en_US-lessac-medium
 PIPER_VOICE_DIR=$MS/models/piper
+KOKORO_DIR=$MS/models/kokoro
+KOKORO_VOICE=af_heart
 GPU_MAX_TEMP_C=85
 GPU_MAX_MEM_PERCENT=92
 EOF

@@ -48,6 +48,7 @@ class CallRecorder:
         # Facts the reply guard needs: did a booking / cancel really succeed in this call?
         self.booked = False
         self.cancelled = False
+        self.checked = False  # did the agent look at the schedule yet?
         self._queue: asyncio.Queue[tuple[str, Callable[[], Awaitable[Any]]]] = asyncio.Queue()
         self._worker: asyncio.Task[None] | None = None
 

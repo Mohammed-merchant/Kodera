@@ -24,6 +24,7 @@ log = structlog.get_logger(__name__)
 
 SAFE_NOT_BOOKED = "I have not booked that yet. Which day would you like to come in?"
 SAFE_NOT_CANCELLED = "I have not cancelled anything yet. Could you tell me the appointment date?"
+SAFE_CHECK_FIRST = "Let me check the schedule for you."
 SAFE_NO_ADVICE = "I am sorry, I cannot give medical advice. The doctor will guide you at the visit."
 
 _APPOINTMENT = r"(?:appointment|booking|slot|visit|consultation|reservation)"
@@ -54,10 +55,24 @@ _ADVICE = re.compile(
     r"\b(?:sounds|looks) like (?:a |an )?(?:cold|flu|infection|virus|viral|allergy|fever)\b",
     re.IGNORECASE,
 )
+_TIME_OR_DAY = re.compile(
+    r"\b\d{1,2}(?::\d{2})?\s?(?:a\.?m\.?|p\.?m\.?)\b|\b\d{1,2}:\d{2}\b|\bo'clock\b|"
+    r"\b(?:morning|afternoon|evening|tomorrow|today|monday|tuesday|wednesday|thursday|friday|"
+    r"saturday|sunday)\b",
+    re.IGNORECASE,
+)
+_CLAIM_AVAILABLE = re.compile(
+    r"\b(?:is|are)\s+(?:currently\s+|still\s+)?(?:available|free)\b|"
+    r"\b(?:available|free)\s+(?:at|on|from|for)\b|"
+    r"\bwe have (?:a |an |some )?(?:slot|slots|opening|openings|time|times|availability)\b",
+    re.IGNORECASE,
+)
 _SENTENCE_END = re.compile(r"[.!?]\s*$|\n")
 
 
-def check_sentence(sentence: str, *, booked: bool, cancelled: bool) -> tuple[str, str | None]:
+def check_sentence(
+    sentence: str, *, booked: bool, cancelled: bool, checked: bool = True
+) -> tuple[str, str | None]:
     """Return (text to speak, reason it was replaced or None)."""
     plain = sentence.strip()
     if _ADVICE.search(plain):
@@ -67,6 +82,14 @@ def check_sentence(sentence: str, *, booked: bool, cancelled: bool) -> tuple[str
         return SAFE_NOT_BOOKED, "claimed a booking that was not made"
     if not cancelled and not negated and _CLAIM_CANCELLED.search(plain):
         return SAFE_NOT_CANCELLED, "claimed a cancellation that was not made"
+    if (
+        not checked
+        and not negated
+        and not plain.endswith("?")
+        and _TIME_OR_DAY.search(plain)
+        and _CLAIM_AVAILABLE.search(plain)
+    ):
+        return SAFE_CHECK_FIRST, "promised a time before checking the schedule"
     return sentence, None
 
 
@@ -81,13 +104,20 @@ class ReplyGuard(FrameProcessor):
 
     async def _release(self, text: str, direction: FrameDirection) -> None:
         spoken, why = check_sentence(
-            text, booked=self._recorder.booked, cancelled=self._recorder.cancelled
+            text,
+            booked=self._recorder.booked,
+            cancelled=self._recorder.cancelled,
+            checked=getattr(self._recorder, "checked", True),
         )
         if why:
             # Say the safe sentence once per reply; drop any further bad ones silently.
             log.warning("reply_blocked", reason=why, said=text.strip()[:120])
             await self._recorder.add_event("guard", reason=why, blocked=text.strip()[:200])
-            if self._replaced_this_reply and spoken in (SAFE_NO_ADVICE, SAFE_NOT_BOOKED):
+            if self._replaced_this_reply and spoken in (
+                SAFE_NO_ADVICE,
+                SAFE_NOT_BOOKED,
+                SAFE_CHECK_FIRST,
+            ):
                 return
             self._replaced_this_reply = True
         await self.push_frame(LLMTextFrame(text=spoken), direction)

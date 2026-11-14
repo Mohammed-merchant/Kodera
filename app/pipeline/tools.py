@@ -19,8 +19,6 @@ from app.core.privacy import mask_number
 
 log = structlog.get_logger(__name__)
 
-MAX_SLOTS_OFFERED = 6
-
 
 def build_tools(
     settings: Settings,
@@ -66,31 +64,46 @@ def build_tools(
         return wrapper
 
     @guarded
-    async def check_available_slots(params: FunctionCallParams, date: str) -> None:
-        """Look up the free appointment slots on one day.
+    async def check_available_slots(params: FunctionCallParams, date: str, time: str = "") -> None:
+        """Look up ALL the free appointment times of one day, or check one specific time.
 
         Args:
             date: The day as YYYY-MM-DD, or the word today or tomorrow.
+            time: Optional. A time the caller asked for (17:00 or 5 PM), to check just that one.
         """
         day = appts.parse_day(date, sched)
         if day is None:
             return await params.result_callback(bad("Ask the caller for a clear date."))
         free = await backend.free_slots(day)
+        if recorder is not None:
+            recorder.checked = True  # the agent has looked: it may now talk about availability
         if not free:
             closed = backend.is_closed(day)
             msg = "The clinic is closed that day." if closed else "No free slots left that day."
             return await params.result_callback(bad(msg))
-        shown = free[:MAX_SLOTS_OFFERED]
-        await params.result_callback(
-            {
-                "ok": True,
-                "date": day.isoformat(),
-                "free_slots": [
-                    {"time": f"{s:%H:%M}", "say": appts.speak_slot(s, sched)} for s in shown
+        result: dict[str, Any] = {
+            "ok": True,
+            "date": day.isoformat(),
+            "weekday": f"{day:%A}",
+            "slot_minutes": sched.slot_minutes,
+            # Everything is returned, so the agent can answer "is 5 PM free?" without guessing.
+            "free_times": [f"{x:%H:%M}" for x in free],
+            "free_ranges_to_say": appts.spoken_ranges(free, sched),
+            "note": "These are ALL the free times that day. Any time not in the list is taken.",
+        }
+        clock = appts.parse_clock(time) if time else None
+        if clock is not None:
+            wanted = datetime.combine(day, clock, tzinfo=sched.tz)
+            result["requested"] = {
+                "time": f"{clock:%H:%M}",
+                "free": wanted in free,
+                "nearest_free": [
+                    {"time": f"{x:%H:%M}", "say": appts.clock_label(x, sched)}
+                    for x in appts.nearest(free, wanted, 3)
+                    if x != wanted
                 ],
-                "more_slots_available": len(free) > len(shown),
             }
-        )
+        await params.result_callback(result)
 
     @guarded
     async def book_appointment(
@@ -142,7 +155,24 @@ def build_tools(
                 slot=outcome.slot.isoformat() if outcome.slot else None,
                 message=outcome.message,
             )
-        await params.result_callback({"ok": outcome.ok, "message": outcome.message})
+        if outcome.ok:
+            return await params.result_callback({"ok": True, "message": outcome.message})
+        # Taken (or gone): hand back the nearest free times now, so the agent can answer at once
+        # instead of looking the day up again, which costs the caller several more seconds.
+        alternatives: list[dict[str, str]] = []
+        try:
+            free = await backend.free_slots(day)
+            alternatives = [
+                {"time": f"{x:%H:%M}", "say": appts.clock_label(x, sched)}
+                for x in appts.nearest(free, slot, 3)
+            ]
+        except Exception:
+            log.warning("alternatives_unavailable", call_sid=call_sid)
+        message = outcome.message
+        if alternatives:
+            message += " Nearest free times: " + ", ".join(a["say"] for a in alternatives) + "."
+        refusal = {"ok": False, "message": message, "alternatives": alternatives}
+        await params.result_callback(refusal)
 
     @guarded
     async def cancel_appointment(params: FunctionCallParams, date: str = "") -> None:
