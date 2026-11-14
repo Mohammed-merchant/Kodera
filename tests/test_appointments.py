@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
@@ -114,25 +115,17 @@ async def test_stored_utc_matches_clinic_time(session_factory: Factory) -> None:
 # ----- the tools the LLM calls -----
 
 
-class FakeParams:
-    def __init__(self) -> None:
-        self.result: dict | None = None
-
-    async def result_callback(self, result: dict) -> None:
-        self.result = result
-
-
 async def call(tools: list, name: str, **kwargs: object) -> dict:
-    fn = next(t for t in tools if t.__name__ == name)
-    params = FakeParams()
-    await fn(params, **kwargs)
-    assert params.result is not None
-    return params.result
+    """Run one LiveKit function tool the way the agent does, and read its JSON answer."""
+    fn = next(t for t in tools if t.info.name == name)
+    result = await fn(**kwargs)
+    assert isinstance(result, str)
+    return json.loads(result)
 
 
 async def test_tools_book_flow(session_factory: Factory) -> None:
     tools = build_tools(SETTINGS, session_factory, caller_number="+919876543210", call_sid="CA9")
-    assert {t.__name__ for t in tools} == {
+    assert {t.info.name for t in tools} == {
         "check_available_slots",
         "book_appointment",
         "cancel_appointment",

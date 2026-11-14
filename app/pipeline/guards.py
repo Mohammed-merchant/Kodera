@@ -4,21 +4,15 @@ A small model sometimes says things it must not: "I have booked your appointment
 called the booking tool (nothing was saved!), or medical advice. This processor checks every
 sentence BEFORE it is spoken and swaps a bad one for a safe sentence.
 
-It sits between the LLM and TTS. TTS needs whole sentences anyway, so buffering sentences here
-adds no delay.
+It runs inside the agent's llm_node (see voice_pipeline.py), between the LLM and TTS, so a
+replaced sentence is also what goes into the chat history. TTS needs whole sentences anyway, so
+buffering sentences here adds no delay.
 """
 
 import re
 from typing import Any
 
 import structlog
-from pipecat.frames.frames import (
-    Frame,
-    InterruptionFrame,
-    LLMFullResponseEndFrame,
-    LLMTextFrame,
-)
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 log = structlog.get_logger(__name__)
 
@@ -101,16 +95,19 @@ def check_sentence(
     return sentence, None
 
 
-class ReplyGuard(FrameProcessor):
-    """Checks each LLM sentence before it reaches the voice."""
+class ReplyGuard:
+    """Checks each LLM sentence of ONE reply before it reaches the voice.
 
-    def __init__(self, recorder: Any, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+    Make a new one per reply: feed() the streamed text, then end() when the reply is over.
+    An interrupted reply simply drops its guard, and with it any half sentence.
+    """
+
+    def __init__(self, recorder: Any) -> None:
         self._recorder = recorder
         self._buffer = ""
         self._replaced_this_reply = False
 
-    async def _release(self, text: str, direction: FrameDirection) -> None:
+    async def _release(self, text: str) -> str | None:
         spoken, why = check_sentence(
             text,
             booked=self._recorder.booked,
@@ -127,23 +124,25 @@ class ReplyGuard(FrameProcessor):
                 SAFE_CHECK_FIRST,
                 SAFE_SAY_AGAIN,
             ):
-                return
+                return None
             self._replaced_this_reply = True
-        await self.push_frame(LLMTextFrame(text=spoken), direction)
+            spoken += " "  # the next sentence must not run into the safe one
+        return spoken
 
-    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        if isinstance(frame, LLMTextFrame) and direction == FrameDirection.DOWNSTREAM:
-            self._buffer += frame.text
-            if _SENTENCE_END.search(self._buffer):
-                text, self._buffer = self._buffer, ""
-                await self._release(text, direction)
-            return
-        if isinstance(frame, LLMFullResponseEndFrame):
-            if self._buffer.strip():
-                text, self._buffer = self._buffer, ""
-                await self._release(text, direction)
-            self._replaced_this_reply = False
-        elif isinstance(frame, InterruptionFrame):
-            self._buffer = ""  # the caller spoke over us: drop the half sentence
-        await self.push_frame(frame, direction)
+    async def feed(self, text: str) -> list[str]:
+        """Text that may be spoken now (whole, checked sentences)."""
+        self._buffer += text
+        if not _SENTENCE_END.search(self._buffer):
+            return []
+        sentence, self._buffer = self._buffer, ""
+        spoken = await self._release(sentence)
+        return [spoken] if spoken else []
+
+    async def end(self) -> list[str]:
+        """The reply is over (or a tool call follows): release the last half sentence."""
+        if not self._buffer.strip():
+            self._buffer = ""
+            return []
+        sentence, self._buffer = self._buffer, ""
+        spoken = await self._release(sentence)
+        return [spoken] if spoken else []

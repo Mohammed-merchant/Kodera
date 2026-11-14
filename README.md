@@ -1,7 +1,7 @@
 # AI Calling Agent
 
 A self-hosted AI voice agent for US phone calls. Python 3.12 + FastAPI, Telnyx media streams,
-and a Pipecat voice pipeline. The STT, LLM and TTS models run on a separate GPU server
+and a LiveKit Agents voice pipeline. The STT, LLM and TTS models run on a separate GPU server
 (see [model_server/README.md](model_server/README.md)).
 
 **Status: scaffold only.** Only `/health` and `/ready` work so far. There is no call logic or AI
@@ -16,7 +16,7 @@ app/
   core/        settings, JSON logging, security helpers
   db/          async SQLAlchemy session, models, migrations
   events/      after-call events on Redis Streams
-  pipeline/    Pipecat voice loop (VAD -> STT -> LLM -> TTS)
+  pipeline/    LiveKit Agents voice loop (VAD -> STT -> LLM -> TTS)
   providers/   carrier adapters (Telnyx, Twilio later)
   workers/     ARQ background jobs
 docker/        Dockerfile and Caddyfile

@@ -1,1 +1,1 @@
-"""Pipeline layer: the live Pipecat voice loop."""
+"""Pipeline layer: the live voice loop (LiveKit Agents)."""

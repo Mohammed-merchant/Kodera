@@ -17,8 +17,8 @@ dependencies = [
     "alembic==1.20.1",
     "redis==5.3.1",
     "arq==0.28.0",
-    "pipecat-ai[silero,openai,websocket]==1.15.0",
     "twilio==9.13.0",
+    "livekit-agents[openai,silero]==1.8.12",
 ]
 
 [dependency-groups]
@@ -53,5 +53,5 @@ plugins = ["pydantic.mypy"]
 files = ["app", "tests"]
 
 [[tool.mypy.overrides]]
-module = ["arq.*", "pipecat.*", "twilio.*"]
+module = ["arq.*", "onnxruntime.*", "twilio.*"]
 ignore_missing_imports = true

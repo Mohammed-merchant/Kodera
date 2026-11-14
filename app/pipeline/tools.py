@@ -7,6 +7,7 @@ The agent must only confirm a booking after the tool returned ok=True.
 import difflib
 import functools
 import inspect
+import json
 import re
 from datetime import datetime
 from typing import Any
@@ -31,8 +32,9 @@ def build_tools(
     recorder: Any = None,
     backend: BookingBackend | None = None,
 ) -> list[Any]:
-    # Imported here so the rest of the app does not load Pipecat.
-    from pipecat.services.llm_service import FunctionCallParams
+    """The tools as LiveKit function tools. Each returns JSON text for the model to read."""
+    # Imported here so the rest of the app does not load LiveKit.
+    from livekit.agents import function_tool
 
     sched = appts.schedule_from_settings(settings)
     backend = backend or make_backend(settings, factory)
@@ -64,31 +66,31 @@ def build_tools(
         )
 
     def guarded(fn: Any) -> Any:
-        """If a tool breaks (database down...), tell the agent so it never invents an answer."""
+        """Make a LiveKit tool. If it breaks (database down...), tell the agent so it never
+        invents an answer."""
 
         allowed = set(inspect.signature(fn).parameters)
 
         @functools.wraps(fn)
-        async def wrapper(params: FunctionCallParams, *args: Any, **kwargs: Any) -> None:
+        async def wrapper(*args: Any, **kwargs: Any) -> str:
             try:
                 # Small models sometimes add arguments the tool does not have; ignore them.
                 extra = set(kwargs) - allowed
                 if extra:
                     log.warning("tool_extra_arguments", tool=fn.__name__, ignored=sorted(extra))
-                await fn(params, *args, **{k: v for k, v in kwargs.items() if k in allowed})
+                result = await fn(*args, **{k: v for k, v in kwargs.items() if k in allowed})
             except Exception:
                 log.exception("appointment_tool_failed", tool=fn.__name__, call_sid=call_sid)
-                await params.result_callback(
-                    bad(
-                        "The booking system is not working right now. Say sorry, say the clinic "
-                        "staff will call back to confirm, and do not promise any booking."
-                    )
+                result = bad(
+                    "The booking system is not working right now. Say sorry, say the clinic "
+                    "staff will call back to confirm, and do not promise any booking."
                 )
+            return json.dumps(result, ensure_ascii=False)
 
-        return wrapper
+        return function_tool(wrapper)
 
     @guarded
-    async def check_available_slots(params: FunctionCallParams, date: str, time: str = "") -> None:
+    async def check_available_slots(date: str, time: str = "") -> dict[str, Any]:
         """Look up ALL the free appointment times of one day, or check one specific time.
 
         Args:
@@ -97,16 +99,16 @@ def build_tools(
         """
         day = appts.parse_day(date, sched)
         if day is None:
-            return await params.result_callback(bad("Ask the caller for a clear date."))
+            return bad("Ask the caller for a clear date.")
         if day < sched.now().date():
-            return await params.result_callback(past_day(day))
+            return past_day(day)
         free = await backend.free_slots(day)
         if recorder is not None:
             recorder.checked = True  # the agent has looked: it may now talk about availability
         if not free:
             closed = backend.is_closed(day)
             msg = "The clinic is closed that day." if closed else "No free slots left that day."
-            return await params.result_callback(bad(msg))
+            return bad(msg)
         result: dict[str, Any] = {
             "ok": True,
             "date": day.isoformat(),
@@ -131,17 +133,16 @@ def build_tools(
             # A short, plain answer first: small models misread long lists.
             result = {"ok": True, "date": day.isoformat(), "time": f"{clock:%H:%M}",
                       "time_is_free": wanted in free, "answer": answer}  # fmt: skip
-        await params.result_callback(result)
+        return result
 
     @guarded
     async def book_appointment(
-        params: FunctionCallParams,
         patient_name: str,
         date: str,
         time: str,
         reason: str,
         phone_number: str = "",
-    ) -> None:
+    ) -> dict[str, Any]:
         """Book an appointment. Only call this after the caller agreed to a free slot.
 
         Args:
@@ -156,17 +157,15 @@ def build_tools(
         # The caller's own number (from the call) wins: models invent numbers like 1234567890.
         phone = caller_phone or appts.normalize_phone(phone_number)
         if day is None or clock is None:
-            return await params.result_callback(bad("The date or time was not clear. Ask again."))
+            return bad("The date or time was not clear. Ask again.")
         if day < sched.now().date():
-            return await params.result_callback(past_day(day))
+            return past_day(day)
         if phone is None:
-            return await params.result_callback(bad("Ask the caller for their phone number."))
+            return bad("Ask the caller for their phone number.")
         if len(patient_name.strip()) < 2 or not name_was_heard(patient_name):
-            return await params.result_callback(
-                bad(
-                    "The caller has not told you the patient's name yet. Ask: May I have your "
-                    "name? Wait for the answer. Never invent a name."
-                )
+            return bad(
+                "The caller has not told you the patient's name yet. Ask: May I have your "
+                "name? Wait for the answer. Never invent a name."
             )
         slot = datetime.combine(day, clock, tzinfo=sched.tz)
         outcome = await backend.book(
@@ -192,7 +191,7 @@ def build_tools(
                 message=outcome.message,
             )
         if outcome.ok:
-            return await params.result_callback({"ok": True, "message": outcome.message})
+            return {"ok": True, "message": outcome.message}
         # Taken (or gone): hand back the nearest free times now, so the agent can answer at once
         # instead of looking the day up again, which costs the caller several more seconds.
         alternatives: list[dict[str, str]] = []
@@ -208,34 +207,32 @@ def build_tools(
         if alternatives:
             message += " Nearest free times: " + ", ".join(a["say"] for a in alternatives) + "."
         refusal = {"ok": False, "message": message, "alternatives": alternatives}
-        await params.result_callback(refusal)
+        return refusal
 
     @guarded
-    async def cancel_appointment(params: FunctionCallParams, date: str = "") -> None:
+    async def cancel_appointment(date: str = "") -> dict[str, Any]:
         """Cancel the caller's upcoming appointment. To reschedule, cancel then book a new one.
 
         Args:
             date: The day of the appointment (YYYY-MM-DD, today or tomorrow). Optional.
         """
         if caller_phone is None:
-            return await params.result_callback(bad("Ask the caller for their phone number."))
+            return bad("Ask the caller for their phone number.")
         day = appts.parse_day(date, sched) if date else None
         outcome = await backend.cancel(caller_phone, day)
         log.info("appointment_cancel", call_sid=call_sid, ok=outcome.ok)
         if recorder is not None:
             recorder.cancelled = recorder.cancelled or outcome.ok
             await recorder.add_event("cancel", ok=outcome.ok, message=outcome.message)
-        await params.result_callback({"ok": outcome.ok, "message": outcome.message})
+        return {"ok": outcome.ok, "message": outcome.message}
 
     @guarded
-    async def my_appointments(params: FunctionCallParams) -> None:
+    async def my_appointments() -> dict[str, Any]:
         """List the caller's upcoming appointments."""
         if caller_phone is None:
-            return await params.result_callback(bad("Ask the caller for their phone number."))
+            return bad("Ask the caller for their phone number.")
         mine = await backend.upcoming(caller_phone)
         said = [appts.speak_slot(when, sched) for when in mine]
-        await params.result_callback(
-            {"ok": True, "appointments": said or "none"}  # "none" reads better than []
-        )
+        return {"ok": True, "appointments": said or "none"}  # "none" reads better than []
 
     return [check_available_slots, book_appointment, cancel_appointment, my_appointments]

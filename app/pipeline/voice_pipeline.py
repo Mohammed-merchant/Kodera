@@ -1,13 +1,17 @@
-"""Voice agent for one phone call.
+"""Voice agent for one phone call, built on LiveKit Agents.
 
-    Exotel WebSocket -> VAD -> STT -> LLM -> TTS -> Exotel WebSocket
+    Exotel WebSocket -> VAD -> STT -> LLM (+ tools, reply guard) -> TTS -> Exotel WebSocket
 
 STT, LLM and TTS run on the GPU server (see model_server/). This module only wires them
-together with Pipecat; it loads no model itself. Pipecat is imported inside run_call so
-the rest of the app (and its tests) do not pay for that import.
+together with a LiveKit AgentSession; it loads no model itself (except the small Silero VAD).
+The session reads and writes the Exotel socket directly (app/pipeline/exotel_io.py).
+LiveKit is imported inside the functions so the rest of the app (and its tests) do not pay for
+that import.
 """
 
 import asyncio
+import contextlib
+from collections.abc import AsyncIterable, AsyncIterator
 from typing import Any
 
 import httpx
@@ -25,8 +29,7 @@ from app.pipeline.prompts import build_greeting, build_system_prompt
 
 log = structlog.get_logger(__name__)
 
-PIPELINE_INPUT_RATE = 16_000  # what VAD and STT work with
-PIPELINE_OUTPUT_RATE = 24_000  # what the TTS server returns; the serializer resamples to 8 kHz
+FRAME_SECONDS = 0.1  # ready-made audio is handed to the session in 100 ms frames
 
 
 async def gpu_server_reachable(settings: Settings) -> bool:
@@ -40,17 +43,139 @@ async def gpu_server_reachable(settings: Settings) -> bool:
         return False
 
 
+def preload() -> None:
+    """The slow part of the warm-up (heavy imports, ~10-20 s on a small server). Safe to run
+    in a worker thread, so startup and /health are not delayed."""
+    import livekit.agents  # noqa: F401
+    import numpy  # noqa: F401
+    import onnxruntime  # noqa: F401
+    import openai  # noqa: F401
+
+    with contextlib.suppress(ImportError):  # what the OpenAI plugin pulls in on import
+        import openai.types.beta.realtime  # noqa: F401
+        import openai.types.realtime  # noqa: F401
+
+
 def warm_up() -> None:
-    """Import Pipecat and load the VAD model once at startup (about 4 s on a small server),
-    so the first caller does not hear silence while that happens."""
-    from pipecat.audio.vad.silero import SileroVADAnalyzer
-    from pipecat.pipeline.worker import PipelineWorker  # noqa: F401
-    from pipecat.serializers.exotel import ExotelFrameSerializer  # noqa: F401
-    from pipecat.transports.websocket.fastapi import FastAPIWebsocketTransport  # noqa: F401
+    """Register the LiveKit plugins and load the VAD model once at startup, so the first caller
+    does not hear silence while that happens. MUST run on the main thread (LiveKit requires
+    plugins to be registered there); after preload() it takes about a second."""
+    preload()  # nothing to do if it already ran
+    from app.pipeline import exotel_io  # noqa: F401
+    from app.pipeline.services import create_vad
 
-    from app.pipeline import services  # noqa: F401
+    create_vad()
 
-    SileroVADAnalyzer()
+
+async def _pcm_frames(pcm: bytes, sample_rate: int) -> AsyncIterator[Any]:
+    """Ready-made 16-bit mono PCM as LiveKit audio frames."""
+    from livekit import rtc
+
+    step = int(sample_rate * FRAME_SECONDS) * 2
+    for i in range(0, len(pcm) - len(pcm) % 2, step):
+        part = pcm[i : i + step]
+        yield rtc.AudioFrame(
+            data=part, sample_rate=sample_rate, num_channels=1, samples_per_channel=len(part) // 2
+        )
+
+
+def _make_agent_class() -> type:
+    """The Agent subclass is built on first use, so importing this module stays cheap."""
+    from livekit.agents import Agent, llm
+    from livekit.agents.voice.agent import ModelSettings
+
+    from app.pipeline.guards import ReplyGuard
+
+    class ClinicAgent(Agent):
+        def __init__(self, *, recorder: CallRecorder, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+            self._recorder = recorder
+
+        async def llm_node(
+            self,
+            chat_ctx: llm.ChatContext,
+            tools: list[llm.Tool],
+            model_settings: ModelSettings,
+        ) -> AsyncIterator[Any]:  # ChatChunk | str | FlushSentinel
+            """The model's reply, checked sentence by sentence (blocks false "booked" claims
+            and medical advice). While a tool runs, the caller hears a short filler."""
+            guard = ReplyGuard(self._recorder)
+            spoke = False
+            filler_said = False
+            async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
+                if isinstance(chunk, str):
+                    for text in await guard.feed(chunk):
+                        spoke = True
+                        yield text
+                    continue
+                if not isinstance(chunk, llm.ChatChunk):
+                    yield chunk
+                    continue
+                delta = chunk.delta
+                if delta is not None and delta.content:
+                    for text in await guard.feed(delta.content):
+                        spoke = True
+                        yield text
+                if delta is not None and delta.tool_calls:
+                    for text in await guard.end():
+                        spoke = True
+                        yield text
+                    if not spoke and not filler_said:
+                        # Looking up slots takes a moment; fill the silence so the caller
+                        # knows we heard. tts_node plays it from ready-made audio.
+                        filler_said = True
+                        yield greeting_audio.FILLER
+                if (delta is not None and (delta.tool_calls or delta.extra)) or chunk.usage:
+                    rest = delta.model_copy(update={"content": None}) if delta else None
+                    yield chunk.model_copy(update={"delta": rest})
+            for text in await guard.end():
+                yield text
+
+        async def tts_node(
+            self, text: AsyncIterable[str], model_settings: ModelSettings
+        ) -> AsyncIterator[Any]:
+            """Speech for the reply. The filler phrase plays from ready-made audio (no round
+            trip to the voice server); everything else goes to the GPU TTS server."""
+            source = aiter(text)
+            seen: list[str] = []
+            joined = ""
+            maybe_filler = True
+            async for piece in source:
+                seen.append(piece)
+                joined += piece
+                if not greeting_audio.FILLER.startswith(joined.strip()):
+                    maybe_filler = False
+                    break
+            ready = greeting_audio.cached_text(greeting_audio.FILLER)
+            if maybe_filler and joined.strip() == greeting_audio.FILLER and ready:
+                async for frame in _pcm_frames(ready, greeting_audio.SAMPLE_RATE):
+                    yield frame
+                return
+
+            async def replay() -> AsyncIterator[str]:
+                for piece in seen:
+                    yield piece
+                async for piece in source:
+                    yield piece
+
+            async for frame in Agent.default.tts_node(self, replay(), model_settings):
+                yield frame
+
+    return ClinicAgent
+
+
+_agent_class: type | None = None
+
+
+def _agent_cls() -> type:
+    global _agent_class
+    if _agent_class is None:
+        _agent_class = _make_agent_class()
+    return _agent_class
+
+
+def _seconds_to_ms(value: Any) -> int | None:
+    return round(value * 1000) if isinstance(value, int | float) else None
 
 
 async def run_call(
@@ -64,155 +189,115 @@ async def run_call(
     settings: Settings,
 ) -> str:
     """Run the agent until the call ends. Returns a short reason for the call log."""
-    # Checked while the pipeline is being built, so it adds no waiting before the greeting.
+    # Checked while the session is being built, so it adds no waiting before the greeting.
     gpu_check = asyncio.create_task(gpu_server_reachable(settings))
 
-    from pipecat.audio.vad.silero import SileroVADAnalyzer
-    from pipecat.frames.frames import TTSAudioRawFrame, TTSSpeakFrame
-    from pipecat.pipeline.pipeline import Pipeline
-    from pipecat.pipeline.runner import PipelineRunner
-    from pipecat.pipeline.worker import PipelineParams, PipelineWorker
-    from pipecat.processors.aggregators.llm_context import LLMContext
-    from pipecat.processors.aggregators.llm_response_universal import (
-        LLMContextAggregatorPair,
-        LLMUserAggregatorParams,
-    )
-    from pipecat.serializers.exotel import ExotelFrameSerializer
-    from pipecat.transports.websocket.fastapi import (
-        FastAPIWebsocketParams,
-        FastAPIWebsocketTransport,
-    )
-    from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
-        SpeechTimeoutUserTurnStopStrategy,
-    )
-    from pipecat.turns.user_turn_strategies import UserTurnStrategies
+    from livekit.agents import AgentSession, llm
+    from livekit.agents.voice import events
 
-    from app.pipeline.guards import ReplyGuard
-    from app.pipeline.latency import LatencyObserver
-    from app.pipeline.services import create_llm, create_stt, create_tts
+    from app.pipeline.exotel_io import ExotelSocket
+    from app.pipeline.services import create_llm, create_stt, create_tts, create_vad
     from app.pipeline.tools import build_tools
 
     recorder = CallRecorder(redis, call_sid, provider="exotel", caller=caller_number)
     await recorder.start()
-
-    transport = FastAPIWebsocketTransport(
-        ws,
-        FastAPIWebsocketParams(
-            audio_in_enabled=True,
-            audio_out_enabled=True,
-            add_wav_header=False,
-            serializer=ExotelFrameSerializer(stream_sid=stream_sid, call_sid=call_sid),
-        ),
-    )
 
     greeting = build_greeting(settings)
     greeting_pcm = greeting_audio.cached(settings)
     tools = build_tools(
         settings, session_factory, caller_number=caller_number, call_sid=call_sid, recorder=recorder
     )
-    # Pipecat does not put the spoken greeting into the chat history. Without this the model
-    # does not know it already greeted, and answers every "hello" with the greeting again.
-    context = LLMContext(
-        [
-            {
-                "role": "system",
-                "content": build_system_prompt(settings, schedule_from_settings(settings).now()),
-            },
-            {"role": "assistant", "content": greeting},
-        ],
+    # The greeting is spoken with say() and kept out of the history there, so it is put into
+    # the history here. Without it the model does not know it already greeted, and answers
+    # every "hello" with the greeting again.
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="assistant", content=greeting)
+    agent = _agent_cls()(
+        recorder=recorder,
+        instructions=build_system_prompt(settings, schedule_from_settings(settings).now()),
+        chat_ctx=chat_ctx,
         tools=tools,
     )
-    aggregators = LLMContextAggregatorPair(
-        context,
-        user_params=LLMUserAggregatorParams(
-            vad_analyzer=SileroVADAnalyzer(),
-            # The default "smart turn" model sometimes held the answer back for 2-3 seconds
-            # after the caller had finished. A short fixed wait is faster and predictable:
-            # the turn ends once this wait AND the transcript are both in.
-            user_turn_strategies=UserTurnStrategies(
-                stop=[
-                    SpeechTimeoutUserTurnStopStrategy(
-                        user_speech_timeout=settings.agent_turn_wait_seconds
-                    )
-                ]
-            ),
-        ),
+    session: AgentSession[None] = AgentSession(
+        stt=create_stt(settings),
+        llm=create_llm(settings),
+        tts=create_tts(settings),
+        vad=create_vad(),
+        turn_handling={
+            "turn_detection": "vad",
+            # After the caller pauses, how long to wait for them to continue before answering.
+            "endpointing": {"mode": "fixed", "min_delay": settings.agent_turn_wait_seconds},
+            # Plain voice-activity interruptions: the "adaptive" mode needs LiveKit Cloud.
+            # (Exotel audio cannot be paused, so a false interruption cannot resume either.)
+            "interruption": {"mode": "vad", "resume_false_interruption": False},
+        },
+        # Hang up if nobody speaks for this long (the session marks the caller "away").
+        user_away_timeout=float(settings.agent_idle_seconds),
     )
+    phone = ExotelSocket(ws, stream_sid)
+    session.input.audio = phone.audio_input
+    session.output.audio = phone.audio_output
 
-    llm = create_llm(settings)
-    tts = create_tts(settings)
-    latency = LatencyObserver()
-    pipeline = Pipeline(
-        [
-            transport.input(),
-            create_stt(settings),
-            aggregators.user(),
-            llm,
-            ReplyGuard(recorder),  # blocks false "booked" claims and medical advice
-            tts,
-            transport.output(),
-            aggregators.assistant(),
-        ]
-    )
-    worker = PipelineWorker(
-        pipeline,
-        params=PipelineParams(
-            audio_in_sample_rate=PIPELINE_INPUT_RATE,
-            audio_out_sample_rate=PIPELINE_OUTPUT_RATE,
-            enable_metrics=True,  # time-to-first-byte of STT, LLM and TTS for every turn
-        ),
-        observers=[latency],
-        idle_timeout_secs=settings.agent_idle_seconds,
-    )
-
+    ended = asyncio.Event()
     reason = "call ended"
     gpu_down = False
+    background: set[asyncio.Task[Any]] = set()
+    last_caller_metrics: dict[str, Any] = {}
 
-    @aggregators.user().event_handler("on_user_turn_stopped")  # type: ignore[untyped-decorator]
-    async def _caller_said(_aggregator: Any, _strategy: Any, message: Any) -> None:
-        await recorder.add_turn("caller", message.content or "")
+    def spawn(coro: Any) -> None:
+        task = asyncio.create_task(coro)
+        background.add(task)
+        task.add_done_callback(background.discard)
 
-    @aggregators.assistant().event_handler("on_assistant_turn_stopped")  # type: ignore[untyped-decorator]
-    async def _agent_said(_aggregator: Any, message: Any) -> None:
-        text = (message.content or "").strip()
-        if text and text != greeting.strip():  # the greeting is recorded when it is played
-            await recorder.add_turn("agent", text, **latency.take())
+    def finish(why: str) -> None:
+        nonlocal reason
+        if not ended.is_set():
+            reason = why
+            ended.set()
 
-    @transport.event_handler("on_client_connected")  # type: ignore[untyped-decorator]
-    async def _greet(_transport: Any, _client: Any) -> None:
-        await recorder.add_turn("agent", greeting)
-        if greeting_pcm:  # ready-made audio: no round trip to the GPU server
-            await tts.queue_frame(
-                TTSAudioRawFrame(
-                    audio=greeting_pcm, sample_rate=greeting_audio.SAMPLE_RATE, num_channels=1
+    @session.on("conversation_item_added")
+    def _said(ev: events.ConversationItemAddedEvent) -> None:
+        nonlocal last_caller_metrics
+        item = ev.item
+        if not isinstance(item, llm.ChatMessage):
+            return
+        text = (item.text_content or "").strip()
+        metrics: dict[str, Any] = dict(item.metrics or {})
+        if item.role == "user":
+            last_caller_metrics = metrics
+            spawn(recorder.add_turn("caller", text))
+        elif item.role == "assistant":
+            # The filler is not a real answer; the greeting is recorded when it is played.
+            text = text.removeprefix(greeting_audio.FILLER).strip()
+            if not text or text == greeting.strip():
+                return
+            stopped = last_caller_metrics.get("stopped_speaking_at")
+            started = metrics.get("started_speaking_at")
+            response = started - stopped if stopped and started and started > stopped else None
+            spawn(
+                recorder.add_turn(
+                    "agent",
+                    text,
+                    response_ms=_seconds_to_ms(response),
+                    stt_ms=_seconds_to_ms(last_caller_metrics.get("transcription_delay")),
+                    llm_ms=_seconds_to_ms(metrics.get("llm_node_ttft")),
+                    tts_ms=_seconds_to_ms(metrics.get("tts_node_ttfb")),
                 )
             )
+
+    @session.on("user_state_changed")
+    def _away(ev: events.UserStateChangedEvent) -> None:
+        if ev.new_state == "away":
+            log.info("caller_silent_hanging_up", call_sid=call_sid)
+            finish("idle")
+
+    @session.on("close")
+    def _closed(ev: events.CloseEvent) -> None:
+        if ev.error is not None:
+            log.error("agent_session_error", call_sid=call_sid, error=str(ev.error))
+            finish("agent error")
         else:
-            await worker.queue_frames([TTSSpeakFrame(greeting)])
-
-    @llm.event_handler("on_function_calls_started")  # type: ignore[untyped-decorator]
-    async def _filler(_service: Any, _calls: Any) -> None:
-        # Looking up slots takes a moment; fill the silence so the caller knows we heard.
-        # The audio is ready-made, so it plays at once (no round trip to the voice server).
-        ready = greeting_audio.cached_text(greeting_audio.FILLER)
-        if ready:
-            await tts.queue_frame(
-                TTSAudioRawFrame(
-                    audio=ready, sample_rate=greeting_audio.SAMPLE_RATE, num_channels=1
-                )
-            )
-        else:
-            await tts.queue_frame(TTSSpeakFrame(greeting_audio.FILLER))
-
-    @transport.event_handler("on_client_disconnected")  # type: ignore[untyped-decorator]
-    async def _hangup(_transport: Any, _client: Any) -> None:
-        await worker.cancel()
-
-    async def _watch_gpu() -> None:
-        nonlocal gpu_down
-        if not await gpu_check:  # a slow failure: the pipeline is already running, stop it
-            gpu_down = True
-            await worker.cancel()
+            finish("call ended")
 
     await asyncio.wait({gpu_check}, timeout=0.05)  # a refused connection answers within this
     if gpu_check.done() and not gpu_check.result():  # fast failure: do not even start
@@ -221,11 +306,30 @@ async def run_call(
         await flush_call(redis, session_factory, call_sid)
         return "gpu unavailable"
 
-    watcher = asyncio.create_task(_watch_gpu())
+    async def watch_gpu() -> None:
+        nonlocal gpu_down
+        if not await gpu_check:  # a slow failure: the session is already running, stop it
+            gpu_down = True
+            finish("gpu unavailable")
+
+    async def read_phone() -> None:
+        finish(await phone.read_until_hangup())
+
+    reader = asyncio.create_task(read_phone())
+    watcher = asyncio.create_task(watch_gpu())
     try:
-        await asyncio.wait_for(
-            PipelineRunner(handle_sigint=False).run(worker), settings.max_call_seconds
-        )
+        async with asyncio.timeout(settings.max_call_seconds):
+            await session.start(agent, record=False)
+            await recorder.add_turn("agent", greeting)
+            if greeting_pcm:  # ready-made audio: no round trip to the GPU server
+                session.say(
+                    greeting,
+                    audio=_pcm_frames(greeting_pcm, greeting_audio.SAMPLE_RATE),
+                    add_to_chat_ctx=False,
+                )
+            else:
+                session.say(greeting, add_to_chat_ctx=False)
+            await ended.wait()
     except TimeoutError:
         reason = "time limit"
     except Exception:
@@ -236,6 +340,14 @@ async def run_call(
         if gpu_down:
             reason = "gpu unavailable"
             log.error("gpu_server_unreachable", call_sid=call_sid, url=settings.llm_base_url)
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(session.aclose(), 5)
+        await phone.audio_output.aclose()
+        reader.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await reader
+        if background:
+            await asyncio.wait(background, timeout=2)
         # Everything recorded in Redis during the call is saved to Postgres now.
         await recorder.finish(reason)
         await flush_call(redis, session_factory, call_sid)

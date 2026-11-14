@@ -20,7 +20,7 @@ from app.db.models import Appointment
 from app.integrations.calcom import CalClient, CalError
 from app.main import app
 from app.pipeline.tools import build_tools
-from tests.test_appointments import SCHED, FakeParams, call, next_open_day
+from tests.test_appointments import SCHED, call, next_open_day
 
 Factory = async_sessionmaker[AsyncSession]
 KEY = "cal_test_key"
@@ -366,10 +366,6 @@ async def test_the_agent_does_not_promise_when_cal_is_down(
                         call_sid="CA9", backend=backend)  # fmt: skip
     result = await call(tools, "check_available_slots", date=cal.day)
     assert not result["ok"] and "do not promise" in result["message"]
-
-
-def test_fake_params_are_shared_with_the_other_tests():
-    assert FakeParams().result is None  # keeps the import honest
 
 
 # ---------- dashboard: the Calendar section ----------

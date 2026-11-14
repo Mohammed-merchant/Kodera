@@ -1,6 +1,6 @@
 """Media stream WebSocket: Twilio sends the caller's audio here.
 
-For now it only echoes each audio frame back (echo test). Later the Pipecat voice
+For now it only echoes each audio frame back (echo test). Later the LiveKit voice
 pipeline will run here, in this process.
 
 Security: Twilio passes back the token we put in the TwiML (see build_voice_twiml);

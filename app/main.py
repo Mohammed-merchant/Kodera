@@ -15,15 +15,18 @@ from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
 from app.db.session import create_session_factory
 from app.pipeline import greeting as greeting_audio
-from app.pipeline.voice_pipeline import warm_up
+from app.pipeline.voice_pipeline import preload, warm_up
 
 settings = get_settings()
 setup_logging(settings.log_level)
 log = get_logger(__name__)
 
 
-def _warm_up_agent() -> None:
+async def _warm_up_agent() -> None:
     try:
+        # The slow imports run in a thread so startup (and /health) are not delayed. LiveKit
+        # registers its plugins on the main thread only, so that short last step runs here.
+        await asyncio.to_thread(preload)
         warm_up()
         log.info("voice_agent_ready")
     except Exception:
@@ -41,8 +44,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     warm_up_task = None
     greeting_task = None
     if settings.voice_agent_enabled:
-        # Runs in a thread so startup (and /health) are not delayed.
-        warm_up_task = asyncio.create_task(asyncio.to_thread(_warm_up_agent))
+        warm_up_task = asyncio.create_task(_warm_up_agent())
         greeting_task = asyncio.create_task(greeting_audio.prefetch(settings))
     try:
         yield

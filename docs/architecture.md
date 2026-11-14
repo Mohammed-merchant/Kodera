@@ -6,7 +6,7 @@ audio loop. Only after-call work is event-driven.
 ```
 carrier (Telnyx) ──HTTPS webhooks──▶ api/routes ──▶ business ──▶ providers (Call Control API)
         │                                              │
-        └──── WSS media stream ──▶ api/ws ──▶ pipeline (Pipecat) ──HTTP──▶ GPU model server
+        └──── WSS media stream ──▶ api/ws ──▶ pipeline (LiveKit Agents) ──HTTP──▶ GPU model server
                                                        │                 (STT / LLM / TTS)
                                                        ▼
                                    db (Postgres)   events ──Redis Streams──▶ workers (ARQ)
@@ -21,7 +21,7 @@ Dependencies point downward only. A layer never imports from a layer above it.
 | core | `app/core` | Settings, JSON logging, signature and API-key checks. Used by every layer. |
 | api | `app/api` | HTTP routes (health, webhooks, admin) and the media-stream WebSocket. Thin: parse, check, delegate. |
 | business | `app/business` | Call lifecycle, call state machine, US compliance rules, and LLM tools. |
-| pipeline | `app/pipeline` | The Pipecat voice loop: VAD → STT → LLM → TTS, with barge-in. Runs inside the app process. |
+| pipeline | `app/pipeline` | The LiveKit Agents voice loop: VAD → STT → LLM → TTS, with barge-in. Runs inside the app process; `exotel_io.py` plugs the Exotel WebSocket in as the session's audio input and output (no LiveKit server needed). |
 | providers | `app/providers` | Carrier adapters behind one small interface: Telnyx now, Twilio later. |
 | db | `app/db` | Async SQLAlchemy session, models (calls, transcripts, consent), repositories and Alembic migrations. |
 | events | `app/events` | Publishes and consumes after-call events on Redis Streams. |

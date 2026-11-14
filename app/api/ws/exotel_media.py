@@ -110,7 +110,7 @@ async def exotel_media_stream(
                     # Saved in the background so a slow database never delays the greeting.
                     saving = asyncio.create_task(_save(ws, call_sid, "stream.started", {}))
                     if settings.voice_agent_enabled:
-                        # Pipecat takes over the socket and runs until the call ends.
+                        # The LiveKit agent takes over the socket and runs until the call ends.
                         reason = await run_call(
                             ws,
                             stream_sid=stream_sid,
