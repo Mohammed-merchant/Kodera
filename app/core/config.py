@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     cal_booking_page: str = ""  # e.g. dr-sharma/consultation: the patients' booking page path
     clinic_timezone_name: str = "Asia/Kolkata"  # IANA name; Cal.diy needs it, not just an offset
     clinic_phone_country_code: str = "+91"  # callers' numbers are sent to Cal.diy in E.164
+    # --- Google Sheet copy of every booking (docs/google_sheet_apps_script.gs). Empty = off. ---
+    google_sheet_url: str = ""  # the Apps Script web app URL (ends with /exec)
+    google_sheet_secret: SecretStr = SecretStr("")  # same value as SECRET in the Apps Script
 
     # --- Clinic (the agent is the clinic's phone receptionist). EDIT THESE in .env. ---
     clinic_name: str = "City Care Clinic"

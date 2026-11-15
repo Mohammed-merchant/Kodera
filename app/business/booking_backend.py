@@ -155,6 +155,17 @@ _cal_clients: dict[tuple[str, str, int], CalClient] = {}
 
 
 def make_backend(settings: Settings, factory: Factory) -> BookingBackend:
+    """The backend chosen by BOOKING_BACKEND, plus the Google Sheet copy when it is set up."""
+    backend = _make_backend(settings, factory)
+    if settings.google_sheet_url:
+        from app.integrations.google_sheet import SheetMirror
+
+        sched = appts.schedule_from_settings(settings)
+        return SheetMirror(backend, settings, sched)
+    return backend
+
+
+def _make_backend(settings: Settings, factory: Factory) -> BookingBackend:
     """The backend chosen by BOOKING_BACKEND. Cal.diy clients are shared between calls."""
     sched = appts.schedule_from_settings(settings)
     if settings.booking_backend != "calcom":
