@@ -155,13 +155,18 @@ _cal_clients: dict[tuple[str, str, int], CalClient] = {}
 
 
 def make_backend(settings: Settings, factory: Factory) -> BookingBackend:
-    """The backend chosen by BOOKING_BACKEND, plus the Google Sheet copy when it is set up."""
+    """The backend chosen by BOOKING_BACKEND, plus the Google Sheet and Google Calendar copies
+    when they are set up. Each copy is made in the background after the database save."""
     backend = _make_backend(settings, factory)
+    sched = appts.schedule_from_settings(settings)
     if settings.google_sheet_url:
         from app.integrations.google_sheet import SheetMirror
 
-        sched = appts.schedule_from_settings(settings)
-        return SheetMirror(backend, settings, sched)
+        backend = SheetMirror(backend, settings, sched)
+    if settings.google_refresh_token.get_secret_value():
+        from app.integrations.google_calendar import CalendarMirror
+
+        backend = CalendarMirror(backend, settings, sched)
     return backend
 
 

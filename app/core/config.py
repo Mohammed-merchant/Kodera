@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     # --- Google Sheet copy of every booking (docs/google_sheet_apps_script.gs). Empty = off. ---
     google_sheet_url: str = ""  # the Apps Script web app URL (ends with /exec)
     google_sheet_secret: SecretStr = SecretStr("")  # same value as SECRET in the Apps Script
+    # --- Google Calendar copy of every booking (docs/google_calendar.md). Empty token = off. ---
+    google_client_id: str = ""  # OAuth client from Google Cloud (APIs & Services > Credentials)
+    google_client_secret: SecretStr = SecretStr("")
+    google_refresh_token: SecretStr = SecretStr("")  # from scripts/google_calendar_auth.py
+    google_calendar_id: str = "primary"  # "primary" = the calendar of the account that allowed it
 
     # --- Clinic (the agent is the clinic's phone receptionist). EDIT THESE in .env. ---
     clinic_name: str = "City Care Clinic"
