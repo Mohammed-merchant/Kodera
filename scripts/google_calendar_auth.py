@@ -20,6 +20,7 @@ import http.server
 import json
 import secrets
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -93,7 +94,16 @@ def main() -> None:
         "https://www.googleapis.com/calendar/v3/calendars/primary/events?maxResults=1",
         headers={"Authorization": f"Bearer {tokens['access_token']}"},
     )
-    urllib.request.urlopen(req).read()
+    try:
+        urllib.request.urlopen(req).read()
+    except urllib.error.HTTPError as exc:
+        reason = exc.read().decode("utf-8", "replace")[:600]
+        sys.exit(
+            f"Google refused the calendar check ({exc.code}): {reason}\n\n"
+            "If it says the Calendar API is not enabled: enable 'Google Calendar API' in this "
+            "project (APIs & Services > Library), wait a minute and run the script again.\n"
+            "If it says insufficient permission: run again and tick the Calendar box on Allow."
+        )
     print(
         "Calendar access works.\n\nPut these four lines in the app's .env on the VPS "
         "(keep them secret), then restart the app:\n"
