@@ -18,7 +18,8 @@
 #   MODEL_SERVER_API_KEY  must equal LLM_API_KEY in the call app's .env on the VPS
 #   NGROK_AUTHTOKEN       your ngrok account token (dashboard.ngrok.com/get-started/your-authtoken)
 #   NGROK_URL             tunnel address        (default https://compel-dissuade-subheader.ngrok-free.dev)
-#   LLM_SIZE=qwen3-8b|7b|3b  4-bit LLM (default qwen3-8b: Hindi/Gujarati + reliable booking; 7b/3b = Qwen2.5)
+#   LLM_SIZE=qwen3-8b|7b|3b|gemma4-12b  4-bit LLM (default qwen3-8b: Hindi/Gujarati + reliable booking;
+#                         7b/3b = Qwen2.5; gemma4-12b = Gemma 4 12B, needs a 16 GB GPU such as the T4)
 #   WHISPER_SIZE=small|base|medium|turbo   speech-to-text model (default small)
 #   LLM_PARALLEL          calls the LLM answers at once (default 2)
 #   SKIP_NGROK=1          set everything up and start the server, but do not open the tunnel yet
@@ -68,7 +69,10 @@ case "$LLM_SIZE" in
   3b) LLM_REPO=Qwen/Qwen2.5-3B-Instruct-GGUF
       LLM_FILES=(qwen2.5-3b-instruct-q4_k_m.gguf)
       LLM_FIRST=${LLM_FILES[0]}; LLM_CTX=${LLM_CTX:-$((4096 * LLM_PARALLEL))} ;;
-  *) die "LLM_SIZE must be qwen3-8b, 7b or 3b" ;;
+  gemma4-12b) LLM_REPO=unsloth/gemma-4-12b-it-GGUF   # ~7.5 GB: needs a 16 GB GPU (T4)
+      LLM_FILES=(gemma-4-12b-it-Q4_K_M.gguf)
+      LLM_FIRST=${LLM_FILES[0]}; LLM_CTX=${LLM_CTX:-$((4096 * LLM_PARALLEL))} ;;
+  *) die "LLM_SIZE must be qwen3-8b, 7b, 3b or gemma4-12b" ;;
 esac
 case "$WHISPER_SIZE" in
   tiny|base|small|medium) W_REPO=Systran/faster-whisper-$WHISPER_SIZE

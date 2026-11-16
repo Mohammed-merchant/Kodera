@@ -26,8 +26,18 @@ HOST = env("BIND_HOST", "127.0.0.1")  # ngrok/gateway reach it locally
 KEY = env("MODEL_SERVER_API_KEY")
 
 
+def _resolve_exe(exe: str) -> str:
+    """A relative path with a folder in it (bin/env/Library/bin/llama-server.exe) becomes an
+    absolute path inside this folder: Windows cannot start a relative path written with "/".
+    A bare name (llama-server) is left as it is, so it is still looked up on PATH."""
+    path = Path(exe)
+    if path.is_absolute() or len(path.parts) == 1:
+        return exe
+    return str((HERE / path).resolve())
+
+
 def llm_cmd() -> list[str]:
-    exe = env("LLAMA_SERVER_BIN", "llama-server")
+    exe = _resolve_exe(env("LLAMA_SERVER_BIN", "llama-server"))
     if not shutil.which(exe):
         sys.exit(f"'{exe}' not found. Install llama.cpp and put llama-server on PATH, "
                  "or set LLAMA_SERVER_BIN. See model_server/README.md.")
