@@ -14,9 +14,12 @@ IP=${IP:-$(curl -fsS4 https://api.ipify.org)}
 HOST=${HOST:-${IP//./-}.sslip.io}
 
 if ! command -v caddy >/dev/null; then
-  V=$(curl -fsSL https://api.github.com/repos/caddyserver/caddy/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)
-  echo "Installing Caddy $V"
   tmp=$(mktemp -d)
+  # Read the release info from a file: piping curl into "grep -m1" makes curl fail (exit 23).
+  curl -fsSL -o "$tmp/release.json" https://api.github.com/repos/caddyserver/caddy/releases/latest
+  V=$(grep '"tag_name"' "$tmp/release.json" | head -1 | cut -d'"' -f4)
+  [ -n "$V" ] || { echo "Could not read the latest Caddy version" >&2; exit 1; }
+  echo "Installing Caddy $V"
   curl -fsSL -o "$tmp/caddy.tgz" "https://github.com/caddyserver/caddy/releases/download/$V/caddy_${V#v}_linux_amd64.tar.gz"
   tar -xzf "$tmp/caddy.tgz" -C "$tmp" caddy
   install -m 755 "$tmp/caddy" /usr/local/bin/caddy
