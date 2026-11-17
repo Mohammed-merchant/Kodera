@@ -34,12 +34,17 @@ FRAME_SECONDS = 0.1  # ready-made audio is handed to the session in 100 ms frame
 
 async def gpu_server_reachable(settings: Settings) -> bool:
     """Quick check that the GPU server answers, so a dead tunnel ends the call at once
-    instead of leaving the caller in silence."""
+    instead of leaving the caller in silence. It uses the shared connection pool, so it also
+    opens (warms) the connection that the first real turn will use while the greeting plays."""
+    import httpx2  # the shared pool is an httpx2 client (the HTTP package of the OpenAI SDK)
+
+    from app.pipeline.services import http_client
+
     root = settings.llm_base_url.removesuffix("/").removesuffix("/v1")
     try:
-        async with httpx.AsyncClient(timeout=4.0) as client:
-            return (await client.get(f"{root}/health")).status_code == 200
-    except httpx.HTTPError:
+        resp = await http_client(settings.llm_base_url).get(f"{root}/health", timeout=4.0)
+        return resp.status_code == 200
+    except (httpx2.HTTPError, httpx.HTTPError):
         return False
 
 
