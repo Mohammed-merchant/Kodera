@@ -66,6 +66,8 @@ def create_llm(s: Settings) -> openai.LLM:
         model=s.llm_model,
         client=_client(s.llm_base_url, s.llm_api_key.get_secret_value()),
         temperature=0.0,
+        # Lets the model check several days in one turn (e.g. tomorrow, Friday and Saturday).
+        parallel_tool_calls=True,
         # llama-server reads max_tokens; strict tool schemas are an OpenAI-only feature.
         extra_body={"max_tokens": s.llm_max_tokens},
         _strict_tool_schema=False,

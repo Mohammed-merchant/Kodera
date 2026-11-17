@@ -128,6 +128,7 @@ async def test_tools_book_flow(session_factory: Factory) -> None:
     assert {t.info.name for t in tools} == {
         "check_available_slots",
         "book_appointment",
+        "book_appointments",
         "cancel_appointment",
         "my_appointments",
     }
@@ -141,6 +142,24 @@ async def test_tools_book_flow(session_factory: Factory) -> None:
     assert not (await call(tools, "book_appointment", **{**args, "patient_name": "Ravi"}))["ok"]
     assert len((await call(tools, "my_appointments"))["appointments"]) == 1
     assert (await call(tools, "cancel_appointment", date=day))["ok"]
+
+
+async def test_a_family_is_booked_in_one_call(session_factory: Factory) -> None:
+    tools = build_tools(SETTINGS, session_factory, caller_number="+919876543210", call_sid="CA7")
+    day = next_open_day().isoformat()
+    group = [
+        {"patient_name": "Mohammed Merchant", "date": day, "time": "17:00", "reason": "fever"},
+        {"patient_name": "Ali Merchant", "date": day, "time": "17:15", "reason": "fever"},
+        {"patient_name": "Rabab Merchant", "date": day, "time": "17:00", "reason": "headache"},
+    ]
+    result = await call(tools, "book_appointments", bookings=group)
+    # Two booked; the third asked for a time the first one just took, so it gets alternatives.
+    assert not result["ok"] and result["booked"] == 2
+    assert [r["ok"] for r in result["results"]] == [True, True, False]
+    assert result["results"][2]["alternatives"]
+    assert "Rabab Merchant" in result["message"] and "NOT booked" in result["message"]
+    assert len((await call(tools, "my_appointments"))["appointments"]) == 2
+    assert not (await call(tools, "book_appointments", bookings=[]))["ok"]
 
 
 async def test_tools_handle_bad_input(session_factory: Factory) -> None:

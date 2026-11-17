@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any
 
 import structlog
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.business import appointments as appts
@@ -21,6 +22,17 @@ from app.core.config import Settings
 from app.core.privacy import mask_number
 
 log = structlog.get_logger(__name__)
+
+MAX_GROUP_BOOKINGS = 10  # one call books at most this many (a family, not a whole school)
+
+
+class GroupBooking(BaseModel):
+    """One patient in a book_appointments call."""
+
+    patient_name: str = Field(description="The patient's name, as the caller said it.")
+    date: str = Field(description="The day as YYYY-MM-DD, or the word today or tomorrow.")
+    time: str = Field(description="The slot time as returned by check_available_slots, like 17:15.")
+    reason: str = Field(description="Why this patient wants to see the doctor, in a few words.")
 
 
 def build_tools(
@@ -135,23 +147,10 @@ def build_tools(
                       "time_is_free": wanted in free, "answer": answer}  # fmt: skip
         return result
 
-    @guarded
-    async def book_appointment(
-        patient_name: str,
-        date: str,
-        time: str,
-        reason: str,
-        phone_number: str = "",
+    async def book_one(
+        patient_name: str, date: str, time: str, reason: str, phone_number: str = ""
     ) -> dict[str, Any]:
-        """Book an appointment. Only call this after the caller agreed to a free slot.
-
-        Args:
-            patient_name: The patient's name.
-            date: The day as YYYY-MM-DD, or the word today or tomorrow.
-            time: The slot time exactly as returned by check_available_slots, like 17:15.
-            reason: Why the patient wants to see the doctor, in a few words.
-            phone_number: Only if the caller's own number is unknown and they gave another one.
-        """
+        """One booking, with every check. Used by book_appointment and book_appointments."""
         day = appts.parse_day(date, sched)
         clock = appts.parse_clock(time)
         # The caller's own number (from the call) wins: models invent numbers like 1234567890.
@@ -210,6 +209,55 @@ def build_tools(
         return refusal
 
     @guarded
+    async def book_appointment(
+        patient_name: str,
+        date: str,
+        time: str,
+        reason: str,
+        phone_number: str = "",
+    ) -> dict[str, Any]:
+        """Book an appointment. Only call this after the caller agreed to a free slot.
+
+        Args:
+            patient_name: The patient's name.
+            date: The day as YYYY-MM-DD, or the word today or tomorrow.
+            time: The slot time exactly as returned by check_available_slots, like 17:15.
+            reason: Why the patient wants to see the doctor, in a few words.
+            phone_number: Only if the caller's own number is unknown and they gave another one.
+        """
+        return await book_one(patient_name, date, time, reason, phone_number)
+
+    @guarded
+    async def book_appointments(bookings: list[GroupBooking]) -> dict[str, Any]:
+        """Book SEVERAL appointments at once (a family, friends), in ONE call. Use it as soon as
+        the caller has chosen a time for each person; do not ask "shall I book" first.
+
+        Args:
+            bookings: One entry per patient, each with patient_name, date, time and reason.
+        """
+        if not bookings:
+            return bad("No bookings were given. Ask who needs an appointment and when.")
+        results: list[dict[str, Any]] = []
+        for raw in bookings[:MAX_GROUP_BOOKINGS]:
+            # The model's JSON arrives as dicts (or ready objects): check each entry on its own,
+            # so one incomplete entry never stops the others.
+            try:
+                b = raw if isinstance(raw, GroupBooking) else GroupBooking.model_validate(raw)
+            except ValueError:
+                who = str(raw.get("patient_name", "?")) if isinstance(raw, dict) else "?"
+                results.append({"patient": who[:100], **bad("Name, day, time or reason missing.")})
+                continue
+            result = await book_one(b.patient_name, b.date, b.time, b.reason)
+            results.append({"patient": b.patient_name.strip()[:100], **result})
+        done = [r["patient"] for r in results if r["ok"]]
+        missed = [r for r in results if not r["ok"]]
+        message = f"{len(done)} of {len(results)} booked"
+        message += f" ({', '.join(done)})." if done else "."
+        if missed:
+            message += " NOT booked: " + " ".join(f"{r['patient']}: {r['message']}" for r in missed)
+        return {"ok": not missed, "booked": len(done), "results": results, "message": message}
+
+    @guarded
     async def cancel_appointment(date: str = "") -> dict[str, Any]:
         """Cancel the caller's upcoming appointment. To reschedule, cancel then book a new one.
 
@@ -235,4 +283,10 @@ def build_tools(
         said = [appts.speak_slot(when, sched) for when in mine]
         return {"ok": True, "appointments": said or "none"}  # "none" reads better than []
 
-    return [check_available_slots, book_appointment, cancel_appointment, my_appointments]
+    return [
+        check_available_slots,
+        book_appointment,
+        book_appointments,
+        cancel_appointment,
+        my_appointments,
+    ]
