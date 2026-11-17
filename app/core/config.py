@@ -47,7 +47,8 @@ class Settings(BaseSettings):
     llm_base_url: str = "http://localhost:8001/v1"
     llm_api_key: SecretStr = SecretStr("")
     llm_model: str = "qwen"  # one key (LLM_API_KEY) is used for the LLM, STT and TTS servers
-    llm_max_tokens: int = 150
+    # A ceiling, not a target (replies stay short): booking 7 people in one tool call needs ~300.
+    llm_max_tokens: int = 600
     stt_base_url: str = "http://localhost:8002/v1"
     tts_base_url: str = "http://localhost:8003/v1"
 

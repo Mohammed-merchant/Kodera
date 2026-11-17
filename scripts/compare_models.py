@@ -128,7 +128,50 @@ def scenarios(s: Settings) -> list[dict[str, Any]]:
             ],
             "expect": "tool:book_appointment",
         },
+        *family_scenarios(tomorrow, tool_result),
     ]
+
+
+def family_scenarios(tomorrow: Any, one_day: str) -> list[dict[str, Any]]:
+    """Several people in one call, and a stray "bye" (from real test calls)."""
+    days = [tomorrow + timedelta(days=i) for i in range(1, 8)]
+    friday = next(d for d in days if d.weekday() == 4)
+    saturday = next(d for d in days if d.weekday() == 5)
+    family = ("My family is not well. Book Mohammed Merchant for tomorrow, Ali Merchant for "
+              "Friday and Rabab Merchant for Saturday. They all have fever and headache.")
+    checks = [{"name": "check_available_slots", "arguments": {"date": d.isoformat()}}
+              for d in (tomorrow, friday, saturday)]
+    free = json.dumps({"ok": True, "free_times": ["17:00", "17:15", "17:30"],
+                       "free_ranges_to_say": "5 PM to 5:30 PM"})
+    offered = [("tool_calls", checks), ("tools", [free, free, free]),
+               ("assistant", "Tomorrow, Friday and Saturday all have 5 PM, 5:15 PM or 5:30 PM. "
+                             "Which times suit everyone?")]
+    group = {"name": "book_appointments", "arguments": {"bookings": [
+        {"patient_name": n, "date": d.isoformat(), "time": "17:00", "reason": "fever and headache"}
+        for n, d in (("Mohammed Merchant", tomorrow), ("Ali Merchant", friday),
+                     ("Rabab Merchant", saturday))]}}
+    one_taken = json.dumps({"ok": False, "booked": 2, "message": (
+        "2 of 3 booked (Mohammed Merchant, Ali Merchant). NOT booked: Rabab Merchant: That time "
+        "is taken. Nearest free times: 5:15 PM, 5:30 PM."), "results": []})
+    return [
+        {"name": "family: check days", "turns": [("user", family)],
+         "expect": "calls:check_available_slots=3"},
+        {"name": "family: book all", "turns": [("user", family), *offered,
+                                              ("user", "5 PM for all of them please.")],
+         "expect": "group:3"},
+        {"name": "family: one taken", "turns": [
+            ("user", family), *offered, ("user", "5 PM for all of them please."),
+            ("tool_call", group), ("tool", one_taken)],
+         "expect": "text~5:15|5\\.15|5:30|5\\.30|17:15|17:30"},
+        {"name": "bye mid-booking", "turns": [
+            ("user", "My name is Mohammed Merchant, I have fever. I want an appointment tomorrow."),
+            ("tool_call", {"name": "check_available_slots",
+                           "arguments": {"date": tomorrow.isoformat()}}),
+            ("tool", one_day),
+            ("assistant", "I have 5 PM, 5:15 PM or 6:30 PM tomorrow. Which suits you?"),
+            ("user", "5 PM will"), ("user", "Bye.")],
+         "expect": "tool:book_appointment"},
+    ]  # fmt: skip
 
 
 def build_messages(
@@ -140,7 +183,15 @@ def build_messages(
         {"role": "assistant", "content": greeting},
     ]
     for role, content in turns:
-        if role == "tool_call":
+        if role == "tool_calls":  # several calls in one turn: [{"name", "arguments"}, ...]
+            msgs.append({"role": "assistant", "tool_calls": [
+                {"id": f"call_test_{i}", "type": "function",
+                 "function": {"name": c["name"], "arguments": json.dumps(c["arguments"])}}
+                for i, c in enumerate(content)]})  # fmt: skip
+        elif role == "tools":  # their results, in the same order
+            msgs += [{"role": "tool", "tool_call_id": f"call_test_{i}", "content": r}
+                     for i, r in enumerate(content)]  # fmt: skip
+        elif role == "tool_call":
             msgs.append(
                 {
                     "role": "assistant",
@@ -220,6 +271,18 @@ MEDICINE = re.compile(r"paracetamol|ibuprofen|crocin|dolo|tablet of|mg\b|antibio
 def verdict(expect: str, res: dict[str, Any], date: str | None = None) -> bool:
     text = res["text"]
     names = [tc["name"] for tc in res["tool_calls"].values()]
+    if expect.startswith("calls:"):  # "calls:check_available_slots=3": at least 3 such calls
+        name, _, n = expect[6:].partition("=")
+        return names.count(name) >= int(n)
+    if expect.startswith("group:"):  # "group:3": one book_appointments call with 3+ patients
+        for tc in res["tool_calls"].values():
+            if tc["name"] == "book_appointments":
+                try:
+                    patients = json.loads(tc["arguments"] or "{}").get("bookings", [])
+                except json.JSONDecodeError:
+                    return False
+                return len(patients) >= int(expect[6:])
+        return False
     if expect.startswith("tool:"):
         calls = [tc for tc in res["tool_calls"].values() if tc["name"] == expect[5:]]
         if not calls or date is None:
@@ -300,7 +363,7 @@ async def main() -> None:
     )
     ap.add_argument("--url", default="http://127.0.0.1:8001/v1")
     ap.add_argument("--models", nargs="+", default=["qwen"])
-    ap.add_argument("--max-tokens", type=int, default=150)
+    ap.add_argument("--max-tokens", type=int, default=600)
     ap.add_argument("--repeat", type=int, default=3, help="runs per scenario (default 3)")
     ap.add_argument("--livekit", action="store_true", help="also run the LiveKit parser check")
     ap.add_argument("--json", help="save all results to this file")
@@ -348,6 +411,7 @@ async def main() -> None:
                     "stream_options": {"include_usage": True},
                     "temperature": 0.0,
                     "max_tokens": args.max_tokens,
+                    "parallel_tool_calls": True,  # as the app sends it (services.create_llm)
                 }
                 label = sc["name"] if args.repeat == 1 else f"{sc['name']} #{run + 1}"
                 res = await stream_once(client, args.url, key, body)

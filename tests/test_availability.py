@@ -177,3 +177,18 @@ async def test_fixed_phrases_are_fetched_from_the_tts_server() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         audio = await greeting._fetch(client, Settings(_env_file=None), greeting.FILLER)
     assert audio and len(audio) == 4000 and "One moment" in seen[0]
+
+
+def test_the_prompt_teaches_group_and_unfinished_bookings() -> None:
+    prompt = build_system_prompt(BIG, SCHED.now())
+    assert "book_appointments ONCE" in prompt  # a family is booked in one call
+    assert "NEVER ask for it" in prompt  # a name or reason already given is not asked again
+    assert 'Never ask "Shall I book that?"' in prompt  # no confirmation question
+    assert "UNFINISHED" in prompt  # a stray "bye" does not end an unfinished booking
+
+
+def test_the_reply_limit_fits_a_family_booking() -> None:
+    from app.core.config import Settings
+
+    # Booking 7 people in one book_appointments call needs ~300 tokens (measured on Gemma).
+    assert Settings(_env_file=None).llm_max_tokens >= 400
