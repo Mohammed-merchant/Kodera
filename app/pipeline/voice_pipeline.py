@@ -11,6 +11,7 @@ that import.
 
 import asyncio
 import contextlib
+import time
 from collections.abc import AsyncIterable, AsyncIterator
 from typing import Any
 
@@ -107,10 +108,29 @@ def _make_agent_class() -> type:
             guard = ReplyGuard(self._recorder)
             spoke = False
             filler_said = False
+            # Where the time of a reply goes (seconds from the start of this reply), logged once
+            # at the end as "reply_timing": the model's first output, the first text handed to
+            # the voice, and whether the model called a tool.
+            started = time.perf_counter()
+            first_output: float | None = None
+            first_spoken: float | None = None
+
+            def mark_spoken() -> None:
+                nonlocal spoke, first_spoken
+                spoke = True
+                if first_spoken is None:
+                    first_spoken = time.perf_counter() - started
+
             async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
+                if first_output is None and (
+                    isinstance(chunk, str)
+                    or (isinstance(chunk, llm.ChatChunk) and chunk.delta is not None
+                        and (chunk.delta.content or chunk.delta.tool_calls))
+                ):  # fmt: skip
+                    first_output = time.perf_counter() - started
                 if isinstance(chunk, str):
                     for text in await guard.feed(chunk):
-                        spoke = True
+                        mark_spoken()
                         yield text
                     continue
                 if not isinstance(chunk, llm.ChatChunk):
@@ -119,22 +139,31 @@ def _make_agent_class() -> type:
                 delta = chunk.delta
                 if delta is not None and delta.content:
                     for text in await guard.feed(delta.content):
-                        spoke = True
+                        mark_spoken()
                         yield text
                 if delta is not None and delta.tool_calls:
                     for text in await guard.end():
-                        spoke = True
+                        mark_spoken()
                         yield text
                     if not spoke and not filler_said:
                         # Looking up slots takes a moment; fill the silence so the caller
                         # knows we heard. tts_node plays it from ready-made audio.
                         filler_said = True
+                        mark_spoken()
                         yield greeting_audio.FILLER
                 if (delta is not None and (delta.tool_calls or delta.extra)) or chunk.usage:
                     rest = delta.model_copy(update={"content": None}) if delta else None
                     yield chunk.model_copy(update={"delta": rest})
             for text in await guard.end():
+                mark_spoken()
                 yield text
+            log.info(
+                "reply_timing",
+                model_first_output_ms=_seconds_to_ms(first_output),
+                first_text_to_voice_ms=_seconds_to_ms(first_spoken),
+                total_ms=_seconds_to_ms(time.perf_counter() - started),
+                tool_call=filler_said,
+            )
 
         async def tts_node(
             self, text: AsyncIterable[str], model_settings: ModelSettings

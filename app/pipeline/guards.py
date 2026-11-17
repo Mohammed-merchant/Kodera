@@ -68,6 +68,28 @@ _CLAIM_AVAILABLE = re.compile(
     re.IGNORECASE,
 )
 _SENTENCE_END = re.compile(r"[.!?]\s*$|\n")
+# The first part of a reply may be spoken before its sentence ends ("Sure, Daha,"), so the voice
+# starts sooner. Only a part with nothing to check: any word below keeps it waiting for the full
+# sentence and the full check, exactly as before.
+_CLAUSE_END = re.compile(r"[,;:]\s*$")
+_RISKY = re.compile(
+    rf"\b{_APPOINTMENT}\b|\b{_BOOKED_WORDS}\b|\b{_CANCEL_WORDS}\b|\b{_MEDICAL}\b|"
+    r"\b(?:book|cancel|reschedul\w*|rest|sleep|water|hydrat\w*|available|free|slots?|"
+    r"times?|am|pm|a\.m|p\.m|doctor|fee|fees|rupees?)\b|\d",
+    re.IGNORECASE,
+)
+
+
+def _speakable_early(text: str) -> bool:
+    """A short opening clause with nothing that a safety check could object to."""
+    plain = text.strip()
+    return (
+        bool(_CLAUSE_END.search(plain))
+        and 2 <= len(plain.split()) <= 8
+        and not _RISKY.search(plain)
+        and not _TIME_OR_DAY.search(plain)
+        and not _TOOL_LEAK.search(plain)
+    )
 
 
 def check_sentence(
@@ -106,6 +128,7 @@ class ReplyGuard:
         self._recorder = recorder
         self._buffer = ""
         self._replaced_this_reply = False
+        self._released_any = False  # only the reply's very first clause may go early
 
     async def _release(self, text: str) -> str | None:
         spoken, why = check_sentence(
@@ -133,9 +156,14 @@ class ReplyGuard:
         """Text that may be spoken now (whole, checked sentences)."""
         self._buffer += text
         if not _SENTENCE_END.search(self._buffer):
-            return []
+            if self._released_any or not _speakable_early(self._buffer):
+                return []
+            clause, self._buffer = self._buffer, ""
+            self._released_any = True
+            return [clause]  # nothing in it to check (see _speakable_early)
         sentence, self._buffer = self._buffer, ""
         spoken = await self._release(sentence)
+        self._released_any = True
         return [spoken] if spoken else []
 
     async def end(self) -> list[str]:
