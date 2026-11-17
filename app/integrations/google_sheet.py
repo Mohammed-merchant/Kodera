@@ -33,10 +33,16 @@ async def send_row(url: str, secret: str, row: dict[str, Any]) -> bool:
             await asyncio.sleep(delay)
         try:
             # Apps Script answers a POST with a redirect to the result: follow it.
-            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            # 30 s: the script waits up to 20 s for its lock, and a cold Apps Script start is
+            # slow. A retry is safe: the script never writes the same booking twice.
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
                 resp = await client.post(url, json=payload)
             body = resp.json() if resp.status_code == 200 else {}
             if body.get("ok"):
+                log.info(
+                    "google_sheet_saved", action=row.get("action"), attempt=attempt,
+                    sheet_row=body.get("row"), duplicate=bool(body.get("duplicate")),
+                )  # fmt: skip
                 return True
             log.warning(
                 "google_sheet_refused", attempt=attempt, status=resp.status_code,
