@@ -26,7 +26,7 @@ from app.business.call_flush import flush_call
 from app.core.config import Settings
 from app.pipeline import greeting as greeting_audio
 from app.pipeline.call_recorder import CallRecorder
-from app.pipeline.prompts import build_greeting, build_system_prompt
+from app.pipeline.prompts import build_greeting, build_system_prompt, language_rule
 
 log = structlog.get_logger(__name__)
 
@@ -93,9 +93,12 @@ def _make_agent_class() -> type:
     from app.pipeline.guards import ReplyGuard
 
     class ClinicAgent(Agent):
-        def __init__(self, *, recorder: CallRecorder, **kwargs: Any) -> None:
+        def __init__(
+            self, *, recorder: CallRecorder, filler: str = greeting_audio.FILLER, **kwargs: Any
+        ) -> None:
             super().__init__(**kwargs)
             self._recorder = recorder
+            self._filler = filler  # "one moment" in the caller's language
 
         async def llm_node(
             self,
@@ -150,7 +153,7 @@ def _make_agent_class() -> type:
                         # knows we heard. tts_node plays it from ready-made audio.
                         filler_said = True
                         mark_spoken()
-                        yield greeting_audio.FILLER
+                        yield self._filler
                 if (delta is not None and (delta.tool_calls or delta.extra)) or chunk.usage:
                     rest = delta.model_copy(update={"content": None}) if delta else None
                     yield chunk.model_copy(update={"delta": rest})
@@ -177,11 +180,11 @@ def _make_agent_class() -> type:
             async for piece in source:
                 seen.append(piece)
                 joined += piece
-                if not greeting_audio.FILLER.startswith(joined.strip()):
+                if not self._filler.startswith(joined.strip()):
                     maybe_filler = False
                     break
-            ready = greeting_audio.cached_text(greeting_audio.FILLER)
-            if maybe_filler and joined.strip() == greeting_audio.FILLER and ready:
+            ready = greeting_audio.cached_text(self._filler)
+            if maybe_filler and joined.strip() == self._filler and ready:
                 async for frame in _pcm_frames(ready, greeting_audio.SAMPLE_RATE):
                     yield frame
                 return
@@ -221,8 +224,12 @@ async def run_call(
     session_factory: async_sessionmaker[AsyncSession],
     redis: Redis,
     settings: Settings,
+    language: str | None = None,
 ) -> str:
-    """Run the agent until the call ends. Returns a short reason for the call log."""
+    """Run the agent until the call ends. Returns a short reason for the call log.
+
+    language: "en", "hi" or "gu" when the caller picked one in the Exotel phone menu (the
+    greeting, the filler, the speech-to-text and the replies then all use it), else None."""
     # Checked while the session is being built, so it adds no waiting before the greeting.
     gpu_check = asyncio.create_task(gpu_server_reachable(settings))
 
@@ -236,8 +243,9 @@ async def run_call(
     recorder = CallRecorder(redis, call_sid, provider="exotel", caller=caller_number)
     await recorder.start()
 
-    greeting = build_greeting(settings)
-    greeting_pcm = greeting_audio.cached(settings)
+    greeting = build_greeting(settings, language)
+    greeting_pcm = greeting_audio.cached(settings, language)
+    filler = greeting_audio.filler(language)
     tools = build_tools(
         settings, session_factory, caller_number=caller_number, call_sid=call_sid, recorder=recorder
     )
@@ -248,12 +256,14 @@ async def run_call(
     chat_ctx.add_message(role="assistant", content=greeting)
     agent = _agent_cls()(
         recorder=recorder,
-        instructions=build_system_prompt(settings, schedule_from_settings(settings).now()),
+        filler=filler,
+        instructions=build_system_prompt(settings, schedule_from_settings(settings).now())
+        + language_rule(language),
         chat_ctx=chat_ctx,
         tools=tools,
     )
     session: AgentSession[None] = AgentSession(
-        stt=create_stt(settings),
+        stt=create_stt(settings, language),
         llm=create_llm(settings),
         tts=create_tts(settings),
         vad=create_vad(),
@@ -305,7 +315,7 @@ async def run_call(
             spawn(recorder.add_turn("caller", text))
         elif item.role == "assistant":
             # The filler is not a real answer; the greeting is recorded when it is played.
-            text = text.removeprefix(greeting_audio.FILLER).strip()
+            text = text.removeprefix(filler).strip()
             if not text or text == greeting.strip():
                 return
             stopped = last_caller_metrics.get("stopped_speaking_at")

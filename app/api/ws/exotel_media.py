@@ -45,9 +45,21 @@ async def _close_quietly(ws: WebSocket, code: int = 1000) -> None:
         await ws.close(code=code)
 
 
+LANGUAGES = {"en", "hi", "gu"}
+
+
+def _language(value: object) -> str | None:
+    """The language the caller picked in the Exotel menu (en, hi or gu), or None (no menu)."""
+    lang = str(value or "").strip().lower()[:5]
+    return lang if lang in LANGUAGES else None
+
+
+# The language comes from the Voicebot applet URL: wss://KEY:TOKEN@DOMAIN/ws/exotel?lang=hi
+# (or /ws/exotel/hi). One Voicebot applet per branch of the Exotel language menu.
 @router.websocket("/ws/exotel")
+@router.websocket("/ws/exotel/{lang}")
 async def exotel_media_stream(
-    ws: WebSocket, settings: Annotated[Settings, Depends(get_settings)]
+    ws: WebSocket, settings: Annotated[Settings, Depends(get_settings)], lang: str | None = None
 ) -> None:
     # Refuse before accepting: wrong carrier or missing/wrong credentials.
     if settings.call_provider != "exotel" or not exotel_provider.verify_basic_auth(
@@ -102,10 +114,15 @@ async def exotel_media_stream(
                     call_sid = sid
                     caller_number = str(start.get("from", ""))
                     stream_sid = str(start.get("stream_sid") or message.get("stream_sid", ""))
+                    custom = start.get("custom_parameters")
+                    language = _language(lang) or _language(
+                        custom.get("lang") if isinstance(custom, dict) else None
+                    )
                     log.info(
                         "exotel_stream_started",
                         call_sid=call_sid,
                         media_format=start.get("media_format"),
+                        language=language or "auto",
                     )
                     # Saved in the background so a slow database never delays the greeting.
                     saving = asyncio.create_task(_save(ws, call_sid, "stream.started", {}))
@@ -119,6 +136,7 @@ async def exotel_media_stream(
                             session_factory=ws.app.state.session_factory,
                             redis=ws.app.state.redis,
                             settings=settings,
+                            language=language,
                         )
                         await saving
                         await _close_quietly(ws)

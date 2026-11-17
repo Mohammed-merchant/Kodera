@@ -80,10 +80,11 @@ script, Gujarati in Gujarati script, short and simple. Tool arguments stay in En
 letters and digits (2026-11-16, 17:00). Names and times may be said as they are.
 
 HOW TO SPEAK: start with a very short first sentence (under eight words) so the caller hears \
-you quickly, then at most one more. Never repeat the same sentence twice. Simple English \
-only. Say times naturally, like "5 PM" or "half past five". No lists, no markdown, no emojis. \
-If the caller speaks another language, politely say you can help in English only. If you did not \
-understand, ask them to repeat. Never make up information.
+you quickly, then at most one more. Never repeat the same sentence twice. Simple words. \
+Say times naturally, like "5 PM" or "half past five". No lists, no markdown, no emojis. \
+If the caller speaks a language other than English, Hindi or Gujarati, politely say you can \
+help in English, Hindi or Gujarati. If you did not understand, ask them to repeat. Never make \
+up information.
 
 CALENDAR (the only dates that exist; copy the date from here, never work it out):
 {calendar}
@@ -126,8 +127,35 @@ def build_system_prompt(settings: Settings, now: datetime) -> str:
     )
 
 
-def build_greeting(settings: Settings) -> str:
+LANGUAGE_NAMES = {"en": "English", "hi": "Hindi", "gu": "Gujarati"}
+# Greetings for callers who picked Hindi or Gujarati in the phone menu (English uses
+# AGENT_GREETING). The clinic name stays as it is written.
+GREETINGS = {
+    "hi": "नमस्ते, {clinic} में फ़ोन करने के लिए धन्यवाद। मैं आपकी क्या मदद कर सकती हूँ?",
+    "gu": "નમસ્તે, {clinic} માં ફોન કરવા બદલ આભાર. હું આપની શું મદદ કરી શકું?",
+}
+
+
+def build_greeting(settings: Settings, language: str | None = None) -> str:
+    if language in GREETINGS:
+        return GREETINGS[language].format(clinic=settings.clinic_name)
     return settings.agent_greeting.format(name=settings.agent_name, clinic=settings.clinic_name)
+
+
+def language_rule(language: str | None) -> str:
+    """Added at the END of the system prompt (the cached start stays the same) when the caller
+    picked a language in the phone menu. Empty when there is no menu (the model then follows the
+    LANGUAGE rule above)."""
+    if language == "en":
+        return ("\nThe caller chose English in the phone menu: answer in English, unless they "
+                "clearly switch to Hindi or Gujarati.")
+    if language in ("hi", "gu"):
+        name = LANGUAGE_NAMES[language]
+        script = "Devanagari" if language == "hi" else "Gujarati"
+        return (f"\nThe caller chose {name} in the phone menu: ALWAYS answer in {name}, in "
+                f"{script} script, short and simple, even if they mix in English words. Tool "
+                "arguments stay in English letters and digits.")
+    return ""
 
 
 def build_stt_prompt(settings: Settings) -> str:

@@ -217,3 +217,41 @@ def test_stream_events_are_saved_with_the_stop_reason(client: TestClient) -> Non
     assert stopped["reason"] == "callended"
     assert stopped["frames"] == 1
     assert stopped["provider"] == "exotel"
+
+
+# --- language from the Exotel phone menu -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("path", "custom", "expected"),
+    [
+        ("/ws/exotel?lang=hi", {}, "hi"),  # Voicebot URL with ?lang=
+        ("/ws/exotel/gu", {}, "gu"),  # or /ws/exotel/<lang>
+        ("/ws/exotel", {"lang": "hi"}, "hi"),  # or Exotel's custom parameters
+        ("/ws/exotel?lang=EN", {}, "en"),
+        ("/ws/exotel", {}, None),  # no menu: the language is guessed per utterance, as before
+        ("/ws/exotel?lang=fr", {}, None),  # unknown: ignored
+    ],
+)
+def test_the_menu_language_reaches_the_agent(
+    monkeypatch: pytest.MonkeyPatch, path: str, custom: dict[str, str], expected: str | None
+) -> None:
+    seen: list[str | None] = []
+
+    async def fake_run_call(*_: Any, language: str | None = None, **__: Any) -> str:
+        seen.append(language)
+        return "test"
+
+    monkeypatch.setattr(exotel_media, "record_stream_event", fake_record)
+    monkeypatch.setattr(exotel_media, "run_call", fake_run_call)
+    app.dependency_overrides[get_settings] = lambda: _settings(voice_agent_enabled=True)
+    start = orjson.loads(start_msg())
+    start["start"]["custom_parameters"] = custom
+    try:
+        with TestClient(app) as c, c.websocket_connect(path, headers=AUTH) as ws:
+            ws.send_text(orjson.dumps(start).decode())
+            with pytest.raises(WebSocketDisconnect):
+                ws.receive_text()
+    finally:
+        app.dependency_overrides.clear()
+    assert seen == [expected]

@@ -18,6 +18,12 @@ from app.pipeline.prompts import build_greeting
 log = structlog.get_logger(__name__)
 
 FILLER = "One moment, let me check."
+# The filler in the language the caller picked in the phone menu (English when there is no menu).
+FILLERS = {"hi": "एक पल, मैं देखती हूँ।", "gu": "એક ક્ષણ, હું જોઉં છું."}
+
+
+def filler(language: str | None = None) -> str:
+    return FILLERS.get(language or "", FILLER)
 SAMPLE_RATE = 24_000  # what the TTS server returns for "pcm"
 RETRY_SECONDS = 30
 _cache: dict[str, bytes] = {}
@@ -27,8 +33,8 @@ def cached_text(text: str) -> bytes | None:
     return _cache.get(text)
 
 
-def cached(settings: Settings) -> bytes | None:
-    return _cache.get(build_greeting(settings))
+def cached(settings: Settings, language: str | None = None) -> bytes | None:
+    return _cache.get(build_greeting(settings, language))
 
 
 async def _fetch(client: httpx.AsyncClient, settings: Settings, text: str) -> bytes | None:
@@ -46,7 +52,10 @@ async def _fetch(client: httpx.AsyncClient, settings: Settings, text: str) -> by
 
 async def prefetch(settings: Settings) -> None:
     """Fetch the audio of the fixed phrases; keep trying until the GPU server answers."""
+    # Every language of the phone menu: the greeting and the filler of each.
     texts = [build_greeting(settings), FILLER]
+    for lang, text in FILLERS.items():
+        texts += [build_greeting(settings, lang), text]
     while any(t not in _cache for t in texts):
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:

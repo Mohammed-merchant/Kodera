@@ -49,12 +49,15 @@ def _client(base_url: str, api_key: str) -> openai_sdk.AsyncClient:
     return _clients[key]
 
 
-def create_stt(s: Settings) -> openai.STT:
-    # detect_language: no language is sent, so the GPU server picks Hindi, Gujarati or English
-    # for every utterance itself (WHISPER_LANGUAGES on the GPU machine).
+def create_stt(s: Settings, language: str | None = None) -> openai.STT:
+    # With a language from the phone menu, Whisper is told it (no guessing: short Hindi or
+    # Gujarati phone audio is often taken for English). Without one, no language is sent and the
+    # GPU server picks Hindi, Gujarati or English for every utterance (WHISPER_LANGUAGES).
     return openai.STT(
         model="whisper-1",
-        detect_language=True,
+        # With detect_language=True the plugin sends no language at all ("en" is then unused).
+        language=language or "en",
+        detect_language=language is None,
         prompt=build_stt_prompt(s),
         client=_client(s.stt_base_url, s.llm_api_key.get_secret_value()),
         use_realtime=False,

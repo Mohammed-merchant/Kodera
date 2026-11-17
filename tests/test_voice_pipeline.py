@@ -98,3 +98,18 @@ def test_call_ends_cleanly_when_gpu_server_is_down(
     assert [d["reason"] for d in stopped] == ["gpu unavailable"]
     assert [event for _, event, _ in SAVED][0] == "stream.started"
     assert saved_calls  # the call is still written to Postgres at hang-up
+
+
+def test_greetings_and_language_rules_follow_the_menu() -> None:
+    from app.pipeline import greeting
+    from app.pipeline.prompts import language_rule
+
+    s = Settings(_env_file=None, clinic_name="Test Clinic")
+    assert "Test Clinic" in build_greeting(s, "hi") and "नमस्ते" in build_greeting(s, "hi")
+    assert "Test Clinic" in build_greeting(s, "gu") and "નમસ્તે" in build_greeting(s, "gu")
+    assert build_greeting(s, None) == build_greeting(s, "en")  # English: AGENT_GREETING
+    assert "Hindi" in language_rule("hi") and "Devanagari" in language_rule("hi")
+    assert "Gujarati" in language_rule("gu") and language_rule(None) == ""
+    assert greeting.filler("hi") != greeting.filler("gu") != greeting.filler(None)
+    prompt = build_system_prompt(s, schedule_from_settings(s).now())
+    assert "English only" not in prompt  # the old rule that contradicted Hindi/Gujarati

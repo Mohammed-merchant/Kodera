@@ -34,7 +34,8 @@ BEAM = int(env("WHISPER_BEAM_SIZE", "3"))
 DEFAULT_PROMPT = env("WHISPER_PROMPT") or None
 MAX_MB = int(env("MAX_UPLOAD_MB", "25"))
 # Languages the callers may speak, e.g. "en,hi,gu". With two or more, the language is detected for
-# every utterance (the client's `language` is ignored); the FIRST one is the default.
+# every utterance unless the client names one of them (the caller picked it in the phone menu);
+# the FIRST one is the default.
 LANGS = [x.strip() for x in env("WHISPER_LANGUAGES").split(",") if x.strip()]
 SWITCH_PROB = float(env("WHISPER_SWITCH_PROB", "0.5"))  # how sure Whisper must be to leave the default
 
@@ -70,6 +71,8 @@ def _pick_language(model, audio, requested):
     the default language wins unless another one is clearly more likely."""
     if len(LANGS) < 2:
         return requested or DEFAULT_LANG
+    if requested in LANGS:  # the caller picked it in the phone menu: no guessing
+        return requested
     try:
         probs = dict(model.detect_language(audio)[2])
     except Exception:  # detection must never lose the call
