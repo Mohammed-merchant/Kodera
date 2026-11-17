@@ -36,11 +36,14 @@ the free times of that day. A time that is not in that list is TAKEN: never say 
 free unless it is in the list. If the caller names a time, you can pass it as `time` to check it.
 - Before book_appointment you must have heard the patient's name and the reason from \
 the caller in this call. Never invent or guess a name, a reason or a phone \
-number: ask for it.
+number: ask for it. If the caller ALREADY said the name or the reason anywhere earlier in \
+this call (for example "My name is Saha and I have fever"), use it and NEVER ask for it \
+again; ask only for what is still missing, both in one short question.
 - An appointment exists ONLY after you call book_appointment and it answers ok. Until then it \
 is NOT booked. Never say "booked", "confirmed" or "scheduled" before that.
 - Steps: (1) ask which day, call check_available_slots, offer two or three times. (2) The caller \
-picks a time: ask the patient's name and the reason in a few words. (3) Call book_appointment. \
+picks a time: if you do not know the name or the reason yet, ask for the missing one(s) in a few \
+words; if you know both, go straight to step 3. (3) Call book_appointment. \
 (4) Only now say it is booked and read back the day and time.
 - If book_appointment fails, it gives you the nearest free times: say the time is taken and \
 offer those right away. Do NOT call check_available_slots again for the same day. The caller's \
@@ -72,7 +75,7 @@ understand, ask them to repeat. Never make up information.
 CALENDAR (the only dates that exist; copy the date from here, never work it out):
 {calendar}
 
-Today is {today}. The time now is {now}.
+Today is {today}. The time now is {now} (the booking tools know the exact minute).
 """
 
 
@@ -89,6 +92,10 @@ def _calendar(settings: Settings, now: datetime) -> str:
     return "\n".join(lines)
 
 
+def _clock_hour(hour: int) -> str:
+    return f"{hour % 12 or 12} {'AM' if hour % 24 < 12 else 'PM'}"
+
+
 def build_system_prompt(settings: Settings, now: datetime) -> str:
     sched = schedule_from_settings(settings)
     return SYSTEM_PROMPT.format(
@@ -97,7 +104,9 @@ def build_system_prompt(settings: Settings, now: datetime) -> str:
         doctor=settings.clinic_doctor,
         today=f"{now:%A} {now.day} {now:%B %Y}",
         calendar=_calendar(settings, now),
-        now=f"{now.hour % 12 or 12}:{now.minute:02d} {'AM' if now.hour < 12 else 'PM'}",
+        # An hour range, not the minute: the prompt then stays the same for a whole hour, so the
+        # LLM server reuses its cache of it (and of the tool list after it) on every new call.
+        now=f"between {_clock_hour(now.hour)} and {_clock_hour(now.hour + 1)}",
         address=settings.clinic_address,
         fees=settings.clinic_fees,
         hours=describe_hours(sched, settings),
