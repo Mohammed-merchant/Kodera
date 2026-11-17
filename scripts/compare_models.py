@@ -10,11 +10,10 @@ server (llama-server or llm_server.py) and reports, per scenario:
 Run it with the project's .venv (it imports app/ to build the real system prompt and tools).
 In PowerShell, from the project folder:
 
-    $cmp = "model_server\\fine_tune_model\\compare_models.py"
-    .venv\\Scripts\\python.exe $cmp --models qwen
-    .venv\\Scripts\\python.exe $cmp --models qwen qwen-base --livekit --repeat 3
+    .venv\\Scripts\\python.exe scripts\\compare_models.py --url https://<gpu-host>/v1 --models qwen
+    .venv\\Scripts\\python.exe scripts\\compare_models.py --models qwen --livekit --repeat 3
 
-Unlike the server code in model_server/, this script imports app/: it is only for testing.
+It imports app/ and model_server/common.py: a developer tool for testing only.
 """
 
 from __future__ import annotations
@@ -31,7 +30,7 @@ from typing import Any
 
 import httpx
 
-ROOT = Path(__file__).resolve().parents[2]  # ai-calling-agent/
+ROOT = Path(__file__).resolve().parents[1]  # ai-calling-agent/
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "model_server"))
 
