@@ -263,7 +263,10 @@ async def run_call(
             "endpointing": {"mode": "fixed", "min_delay": settings.agent_turn_wait_seconds},
             # Plain voice-activity interruptions: the "adaptive" mode needs LiveKit Cloud.
             # (Exotel audio cannot be paused, so a false interruption cannot resume either.)
-            "interruption": {"mode": "vad", "resume_false_interruption": False},
+            # min_words 2: a one-word "hello", "okay" or "bye" while the agent is answering does
+            # not cancel the answer (callers say it when a reply takes a moment); two or more
+            # words still interrupt.
+            "interruption": {"mode": "vad", "resume_false_interruption": False, "min_words": 2},
         },
         # Hang up if nobody speaks for this long (the session marks the caller "away").
         user_away_timeout=float(settings.agent_idle_seconds),
