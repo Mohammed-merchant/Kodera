@@ -208,9 +208,16 @@ class HmsBackend:
 
     name = "hms"
 
-    def __init__(self, client: HmsClient, factory: Factory, sched: Schedule, default_doctor: str):
+    def __init__(
+        self,
+        client: HmsClient,
+        factory: Factory,
+        sched: Schedule,
+        default_doctor: str,
+        country_code: str = "+91",
+    ) -> None:
         self.client, self.factory, self.sched = client, factory, sched
-        self.default_doctor = default_doctor
+        self.default_doctor, self.country_code = default_doctor, country_code
 
     def is_closed(self, day: date) -> bool:
         return False  # each doctor's schedule is in the HMS; "no slots" is the only signal
@@ -238,9 +245,11 @@ class HmsBackend:
         doc = await self.doctor(doctor)
         local = slot.astimezone(self.sched.tz)
         try:
+            patient = await self.client.patient_id(name, f"{self.country_code}{phone}")
             appt_id = await self.client.book(
-                doc, local.date(), local.time(), reason=reason, patient=name, phone=phone
-            )
+                doc, local.date(), local.time(), reason=reason, patient_id=patient,
+                note="Booked by phone (Kodera AI receptionist).",
+            )  # fmt: skip
         except HmsError as exc:
             if exc.rejected:  # taken, or the HMS refused the data
                 log.warning("hms_booking_refused", status=exc.status, error=str(exc)[:200])
@@ -348,7 +357,10 @@ def _make_backend(settings: Settings, factory: Factory) -> BookingBackend:
         password = settings.hms_password.get_secret_value()
         if not (settings.hms_api_url and settings.hms_email and password):
             raise ValueError("BOOKING_BACKEND=hms needs HMS_API_URL, HMS_EMAIL and HMS_PASSWORD")
-        return HmsBackend(hms_client(settings), factory, sched, settings.hms_default_doctor)
+        return HmsBackend(
+            hms_client(settings), factory, sched, settings.hms_default_doctor,
+            settings.clinic_phone_country_code,
+        )  # fmt: skip
     if settings.booking_backend != "calcom":
         return LocalBackend(factory, sched)
     key = settings.cal_api_key.get_secret_value()

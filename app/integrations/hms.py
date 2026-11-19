@@ -2,15 +2,22 @@
 
 The voice agent signs in with its own ADMIN account (HMS_EMAIL / HMS_PASSWORD) and uses:
 
-    GET  /users/doctors                                    doctors (public), cached a few minutes
-    GET  /appointments/doctor/{id}/available-slots?date=   free slots of one doctor on one day
-    POST /appointments                                     book
-    PUT  /appointments/{id}/status  {"status": "CANCELLED"}  cancel
+    GET  /users/doctors                                       doctors (public), cached
+    GET  /appointments/available-slots?doctorId=&date=        free slots of one doctor, one day
+    GET  /users?role=PATIENT&page=&limit=                     patients (to find the caller)
+    POST /auth/register {name, email, password, role, phone}  a new patient
+    POST /appointments {patient, doctor, department, date, time, reason, notes}  book
+    PUT  /appointments/{id}  {"status": "CANCELLED"}          cancel
+
+Checked against the live server: its routes and field names differ from the API document.
 
 Times in the HMS are clinic-local labels like "05:00 PM"; this client turns them into
 datetime.time and back. Every response may come wrapped as {"success", "data"} or bare.
 """
 
+import difflib
+import re
+import secrets
 import time as clock
 from dataclasses import dataclass
 from datetime import date, datetime, time
@@ -65,6 +72,10 @@ def parse_label(label: str) -> time | None:
         except ValueError:
             continue
     return None
+
+
+def _last10(phone: str) -> str:
+    return re.sub(r"\D", "", phone)[-10:]
 
 
 def _unwrap(body: Any) -> Any:
@@ -161,26 +172,74 @@ class HmsClient:
     async def free_slots(self, doctor_id: str, day: date) -> list[time]:
         data = await self.request(
             "GET",
-            f"/appointments/doctor/{doctor_id}/available-slots",
-            params={"date": day.isoformat()},
+            "/appointments/available-slots",
+            params={"doctorId": doctor_id, "date": day.isoformat()},
         )
         labels = data.get("availableSlots", []) if isinstance(data, dict) else []
         return sorted(t for t in (parse_label(str(x)) for x in labels) if t is not None)
 
+    def _alias(self, tag: str) -> str:
+        """agent@gmail.com -> agent+<tag>@gmail.com (Gmail delivers it to the agent's inbox)."""
+        local, _, domain = self.email.partition("@")
+        return f"{local.split('+')[0]}+{tag}@{domain or 'gmail.com'}"
+
+    async def patients(self) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for page in range(1, 51):  # 100 per page; stops after the last page
+            rows = await self.request(
+                "GET", "/users", params={"role": "PATIENT", "page": page, "limit": 100}
+            )
+            rows = rows if isinstance(rows, list) else []
+            out += [r for r in rows if isinstance(r, dict)]
+            if len(rows) < 100:
+                break
+        return out
+
+    async def patient_id(self, name: str, phone_e164: str) -> str:
+        """The caller's patient record: same phone AND a similar name (a family shares one phone;
+        each person has their own record). Created when there is none yet."""
+        digits = _last10(phone_e164)
+        wanted = name.strip().lower()
+        for p in await self.patients():
+            if _last10(str(p.get("phone", ""))) != digits:
+                continue
+            known = str(p.get("name", "")).strip().lower()
+            close = difflib.SequenceMatcher(None, wanted, known).ratio() >= 0.75
+            if close or wanted.split()[:1] == known.split()[:1]:
+                return str(p["_id"])
+        # Callers have no e-mail. The HMS only accepts @gmail.com, so the patient gets a "+" alias
+        # of the agent's OWN Gmail (ai.agent+p91...@gmail.com): any mail lands in the clinic's own
+        # inbox, never at a stranger's address. The random password is never needed.
+        body = await self.request("POST", "/auth/register", auth=False, json={
+            "name": name.strip()[:100],
+            "email": self._alias(f"p{digits}.{secrets.token_hex(2)}"),
+            "password": secrets.token_urlsafe(18),
+            "role": "PATIENT",
+            "phone": phone_e164,
+        })  # fmt: skip
+        user: Any = None
+        for part in (body, body.get("user") if isinstance(body, dict) else None):
+            if isinstance(part, dict):
+                user = part.get("user") if isinstance(part.get("user"), dict) else part
+                if isinstance(user, dict) and user.get("_id"):
+                    break
+        if not isinstance(user, dict) or not user.get("_id"):
+            raise HmsError("the HMS did not return the new patient")
+        log.info("hms_patient_created", patient=str(user["_id"]))
+        return str(user["_id"])
+
     async def book(
-        self, doctor: Doctor, day: date, slot: time, *, reason: str, patient: str, phone: str
+        self, doctor: Doctor, day: date, slot: time, *, reason: str, patient_id: str, note: str = ""
     ) -> str:
-        """Book and return the HMS appointment id. The caller's name and phone go in the reason,
-        so the hospital staff see who the phone booking is for."""
+        """Book and return the HMS appointment id."""
         body: dict[str, Any] = {
-            "doctorId": doctor.id,
-            "departmentId": doctor.department_id or None,
-            "appointmentDate": day.isoformat(),
-            "timeSlot": slot_label(slot),
-            "type": "GENERAL",
-            "reason": f"{reason.strip() or 'Consultation'} | Patient: {patient.strip()}, "
-            f"phone {phone} (booked by the phone receptionist)"[:300],
-            "symptoms": [],
+            "patient": patient_id,
+            "doctor": doctor.id,
+            "department": doctor.department_id or None,
+            "date": day.isoformat(),
+            "time": slot_label(slot),
+            "reason": (reason.strip() or "Consultation")[:300],
+            "notes": note[:300],
         }
         data = await self.request(
             "POST", "/appointments", json={k: v for k, v in body.items() if v is not None}
@@ -192,6 +251,4 @@ class HmsClient:
         return str(appt_id)
 
     async def cancel(self, appointment_id: str) -> None:
-        await self.request(
-            "PUT", f"/appointments/{appointment_id}/status", json={"status": "CANCELLED"}
-        )
+        await self.request("PUT", f"/appointments/{appointment_id}", json={"status": "CANCELLED"})
