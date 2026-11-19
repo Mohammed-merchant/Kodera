@@ -48,17 +48,21 @@ async def mirror_booking(
     start: datetime,
     status: str = "booked",
     call_sid: str | None = None,
+    source: str = "calcom",
+    doctor: str = "",
 ) -> bool:
-    """Create or update our copy of a Cal.diy booking. Returns False if it could not be saved."""
+    """Create or update our copy of an external booking (Cal.diy, or the Smart Hospital system
+    with source="hms"). Returns False if it could not be saved."""
     async with factory() as session:
         appt = await session.scalar(select(Appointment).where(Appointment.external_id == uid))
         if appt is None:
-            appt = Appointment(external_id=uid, source="calcom")
+            appt = Appointment(external_id=uid, source=source)
             session.add(appt)
         appt.patient_name = (name or appt.patient_name or "Unknown").strip()[:100]
         appt.phone = phone or appt.phone or ""
         appt.reason = (reason or appt.reason or "").strip()[:300] or None
         appt.slot_start = start.astimezone(UTC)
+        appt.doctor = (doctor or appt.doctor or "")[:100]
         appt.status = status
         if call_sid and not appt.booked_via_call:
             appt.booked_via_call = call_sid

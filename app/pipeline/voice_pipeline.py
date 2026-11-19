@@ -22,6 +22,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.business.appointments import schedule_from_settings
+from app.business.booking_backend import doctor_list
 from app.business.call_flush import flush_call
 from app.core.config import Settings
 from app.pipeline import greeting as greeting_audio
@@ -257,7 +258,9 @@ async def run_call(
     agent = _agent_cls()(
         recorder=recorder,
         filler=filler,
-        instructions=build_system_prompt(settings, schedule_from_settings(settings).now())
+        instructions=build_system_prompt(
+            settings, schedule_from_settings(settings).now(), await doctor_list(settings)
+        )
         + language_rule(language),
         chat_ctx=chat_ctx,
         tools=tools,

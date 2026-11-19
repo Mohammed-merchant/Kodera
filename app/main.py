@@ -46,10 +46,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.voice_agent_enabled:
         warm_up_task = asyncio.create_task(_warm_up_agent())
         greeting_task = asyncio.create_task(greeting_audio.prefetch(settings))
+    hms_task = None
+    if settings.booking_backend == "hms" and settings.hms_api_url:
+        from app.business.booking_backend import keep_hms_warm
+
+        hms_task = asyncio.create_task(keep_hms_warm(settings))
     try:
         yield
     finally:
-        for task in (warm_up_task, greeting_task):
+        for task in (warm_up_task, greeting_task, hms_task):
             if task:
                 task.cancel()
         await app.state.redis.aclose()

@@ -54,3 +54,10 @@ async def test_advice_after_an_early_clause_is_still_blocked() -> None:
 async def test_rest_advice_never_goes_early() -> None:
     out = await stream(["Rest well", ",", " and take paracetamol", "."])
     assert out == [SAFE_NO_ADVICE + " "]
+
+
+async def test_model_markers_are_never_spoken() -> None:
+    from app.pipeline.guards import SAFE_SAY_AGAIN
+
+    out = await stream(["<|channel>thought\n", "<channel|><|channel>thought\n"])
+    assert out == [SAFE_SAY_AGAIN + " "]  # one safe sentence, never the markers

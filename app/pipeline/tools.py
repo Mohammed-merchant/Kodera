@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.business import appointments as appts
-from app.business.booking_backend import BookingBackend, make_backend
+from app.business.booking_backend import BookingBackend, DoctorNeeded, make_backend
 from app.core.config import Settings
 from app.core.privacy import mask_number
 
@@ -33,6 +33,7 @@ class GroupBooking(BaseModel):
     date: str = Field(description="The day as YYYY-MM-DD, or the word today or tomorrow.")
     time: str = Field(description="The slot time as returned by check_available_slots, like 17:15.")
     reason: str = Field(description="Why this patient wants to see the doctor, in a few words.")
+    doctor: str = Field("", description="Optional. Doctor or specialty (Dr. Chen, heart).")
 
 
 def build_tools(
@@ -102,19 +103,25 @@ def build_tools(
         return function_tool(wrapper)
 
     @guarded
-    async def check_available_slots(date: str, time: str = "") -> dict[str, Any]:
+    async def check_available_slots(
+        date: str, time: str = "", doctor: str = ""
+    ) -> dict[str, Any]:
         """Look up ALL the free appointment times of one day, or check one specific time.
 
         Args:
             date: The day as YYYY-MM-DD, or the word today or tomorrow.
             time: Optional. A time the caller asked for (17:00 or 5 PM), to check just that one.
+            doctor: Optional. The doctor or specialty asked for (Dr. Chen, heart...).
         """
         day = appts.parse_day(date, sched)
         if day is None:
             return bad("Ask the caller for a clear date.")
         if day < sched.now().date():
             return past_day(day)
-        free = await backend.free_slots(day)
+        try:
+            free = await backend.free_slots(day, doctor=doctor)
+        except DoctorNeeded as exc:
+            return bad(str(exc))
         if recorder is not None:
             recorder.checked = True  # the agent has looked: it may now talk about availability
         if not free:
@@ -148,7 +155,12 @@ def build_tools(
         return result
 
     async def book_one(
-        patient_name: str, date: str, time: str, reason: str, phone_number: str = ""
+        patient_name: str,
+        date: str,
+        time: str,
+        reason: str,
+        phone_number: str = "",
+        doctor: str = "",
     ) -> dict[str, Any]:
         """One booking, with every check. Used by book_appointment and book_appointments."""
         day = appts.parse_day(date, sched)
@@ -167,13 +179,17 @@ def build_tools(
                 "name? Wait for the answer. Never invent a name."
             )
         slot = datetime.combine(day, clock, tzinfo=sched.tz)
-        outcome = await backend.book(
-            name=patient_name,
-            phone=phone,
-            slot=slot,
-            reason=reason,
-            call_sid=call_sid,
-        )
+        try:
+            outcome = await backend.book(
+                name=patient_name,
+                phone=phone,
+                slot=slot,
+                reason=reason,
+                call_sid=call_sid,
+                doctor=doctor,
+            )
+        except DoctorNeeded as exc:
+            return bad(str(exc))
         log.info(
             "appointment_booking",
             call_sid=call_sid,
@@ -195,7 +211,7 @@ def build_tools(
         # instead of looking the day up again, which costs the caller several more seconds.
         alternatives: list[dict[str, str]] = []
         try:
-            free = await backend.free_slots(day)
+            free = await backend.free_slots(day, doctor=doctor)
             alternatives = [
                 {"time": f"{x:%H:%M}", "say": appts.clock_label(x, sched)}
                 for x in appts.nearest(free, slot, 3)
@@ -215,6 +231,7 @@ def build_tools(
         time: str,
         reason: str,
         phone_number: str = "",
+        doctor: str = "",
     ) -> dict[str, Any]:
         """Book an appointment. Only call this after the caller agreed to a free slot.
 
@@ -224,8 +241,9 @@ def build_tools(
             time: The slot time exactly as returned by check_available_slots, like 17:15.
             reason: Why the patient wants to see the doctor, in a few words.
             phone_number: Only if the caller's own number is unknown and they gave another one.
+            doctor: Optional. The doctor or specialty asked for (Dr. Chen, heart...).
         """
-        return await book_one(patient_name, date, time, reason, phone_number)
+        return await book_one(patient_name, date, time, reason, phone_number, doctor)
 
     @guarded
     async def book_appointments(bookings: list[GroupBooking]) -> dict[str, Any]:
@@ -247,7 +265,7 @@ def build_tools(
                 who = str(raw.get("patient_name", "?")) if isinstance(raw, dict) else "?"
                 results.append({"patient": who[:100], **bad("Name, day, time or reason missing.")})
                 continue
-            result = await book_one(b.patient_name, b.date, b.time, b.reason)
+            result = await book_one(b.patient_name, b.date, b.time, b.reason, doctor=b.doctor)
             results.append({"patient": b.patient_name.strip()[:100], **result})
         done = [r["patient"] for r in results if r["ok"]]
         missed = [r for r in results if not r["ok"]]

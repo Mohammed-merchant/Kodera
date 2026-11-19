@@ -86,10 +86,10 @@ class SheetMirror:
         }
 
     async def book(
-        self, *, name: str, phone: str, slot: datetime, reason: str, call_sid: str
+        self, *, name: str, phone: str, slot: datetime, reason: str, call_sid: str, doctor: str = ""
     ) -> Outcome:
         outcome: Outcome = await self.inner.book(
-            name=name, phone=phone, slot=slot, reason=reason, call_sid=call_sid
+            name=name, phone=phone, slot=slot, reason=reason, call_sid=call_sid, doctor=doctor
         )
         if outcome.ok:
             row = self._row(

@@ -16,7 +16,7 @@ CLINIC FACTS (use only these; if asked anything else, say the staff will call ba
 - Address: {address}
 - Fees: {fees}
 - Open: {hours}
-
+{doctors}
 YOUR JOB: book, reschedule and cancel appointments, and answer questions about timings, fees \
 and location.
 
@@ -110,7 +110,23 @@ def _clock_hour(hour: int) -> str:
     return f"{hour % 12 or 12} {'AM' if hour % 24 < 12 else 'PM'}"
 
 
-def build_system_prompt(settings: Settings, now: datetime) -> str:
+def _doctor_section(doctors: list[str] | None) -> str:
+    """For the several-doctor backend (Smart Hospital): who the agent can book with."""
+    if not doctors:
+        return ""
+    lines = "\n".join(f"  - {d}" for d in doctors)
+    return (
+        "- Doctors (book only with these; each fee is the doctor's own consultation fee):\n"
+        f"{lines}\n"
+        "- Pass the doctor to check_available_slots and book_appointment(s) (doctor=name). If "
+        "the caller has not said which doctor, suggest one from what they need (heart: "
+        "Cardiology, children: Pediatrics...) or ask. Never invent a doctor.\n"
+    )
+
+
+def build_system_prompt(
+    settings: Settings, now: datetime, doctors: list[str] | None = None
+) -> str:
     sched = schedule_from_settings(settings)
     return SYSTEM_PROMPT.format(
         agent=settings.agent_name,
@@ -124,6 +140,7 @@ def build_system_prompt(settings: Settings, now: datetime) -> str:
         address=settings.clinic_address,
         fees=settings.clinic_fees,
         hours=describe_hours(sched, settings),
+        doctors=_doctor_section(doctors),
     )
 
 

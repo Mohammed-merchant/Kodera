@@ -63,13 +63,18 @@ class Settings(BaseSettings):
     agent_name: str = "Kodera"
     agent_greeting: str = "Hello, thank you for calling {clinic}. How can I help you today?"
     # --- Where appointments live: "local" (our own table) or "calcom" (self-hosted Cal.diy). ---
-    booking_backend: Literal["local", "calcom"] = "local"
+    booking_backend: Literal["local", "calcom", "hms"] = "local"
     cal_api_url: str = "http://calcom-api:80"  # Cal.diy API v2, reached inside the Docker network
     cal_api_key: SecretStr = SecretStr("")  # Cal.diy: Settings > Developer > API keys (cal_...)
     cal_event_type_id: int = 0  # the "Consultation" event type in Cal.diy
     cal_webhook_secret: SecretStr = SecretStr("")  # same secret you give the Cal.diy webhook
     cal_public_url: str = ""  # e.g. https://cal.example.com (shown as a link on the dashboard)
     cal_booking_page: str = ""  # e.g. dr-sharma/consultation: the patients' booking page path
+    # --- Smart Hospital Management System (BOOKING_BACKEND=hms): appointments live there. ---
+    hms_api_url: str = ""  # e.g. https://smart-hospital-zixt.onrender.com/api
+    hms_email: str = ""  # an ADMIN account used only by the voice agent
+    hms_password: SecretStr = SecretStr("")
+    hms_default_doctor: str = ""  # doctor id or name used when the caller names no doctor
     clinic_timezone_name: str = "Asia/Kolkata"  # IANA name; Cal.diy needs it, not just an offset
     clinic_phone_country_code: str = "+91"  # callers' numbers are sent to Cal.diy in E.164
     # --- Google Sheet copy of every booking (docs/google_sheet_apps_script.gs). Empty = off. ---

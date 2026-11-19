@@ -81,9 +81,11 @@ class Appointment(Base):
 
     __tablename__ = "appointments"
     __table_args__ = (
-        # Two patients can never hold the same slot (cancelled rows do not count).
+        # Two patients can never hold the same slot of the same doctor (cancelled rows do not
+        # count). One-doctor clinics leave doctor empty: one booking per slot.
         Index(
-            "uq_appointments_booked_slot",
+            "uq_appointments_booked_doctor_slot",
+            "doctor",
             "slot_start",
             unique=True,
             postgresql_where=text("status = 'booked'"),
@@ -95,6 +97,8 @@ class Appointment(Base):
     patient_name: Mapped[str] = mapped_column(String(100))
     phone: Mapped[str] = mapped_column(String(32), index=True)
     reason: Mapped[str | None] = mapped_column(String(300))
+    # The doctor's name for multi-doctor backends (Smart Hospital); empty for one-doctor clinics.
+    doctor: Mapped[str] = mapped_column(String(100), default="", server_default="")
     slot_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     status: Mapped[str] = mapped_column(String(20), default="booked")  # booked | cancelled
     booked_via_call: Mapped[str | None] = mapped_column(String(64))

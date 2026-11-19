@@ -23,7 +23,8 @@ SAFE_SAY_AGAIN = "Sorry, could you say that once more?"
 # A small model sometimes writes a tool call as plain text instead of making it. Never speak that.
 _TOOL_LEAK = re.compile(
     r"(^/?(check_available_slots|book_appointment|cancel_appointment|my_appointments)"
-    r"|<tool_call>|\{\s*\"[a-z_]+\"\s*:)"
+    r"|<tool_call>|\{\s*\"[a-z_]+\"\s*:"
+    r"|<\|?channel|channel\|>)"  # Gemma's internal "<|channel>thought<channel|>" markers
 )
 SAFE_NO_ADVICE = "I am sorry, I cannot give medical advice. The doctor will guide you at the visit."
 
