@@ -94,5 +94,13 @@ def create_vad() -> lk_vad.VAD:
     if _vad is None:
         # 0.4 s of silence ends the caller's turn (LiveKit's default is 0.55 s): every turn
         # answers 0.15 s sooner, and normal breathing pauses are still shorter than that.
-        _vad = silero.VAD.load(sample_rate=VAD_SAMPLE_RATE, min_silence_duration=0.4)
+        # Phone noise: speech must be clearer (0.6, default 0.5) and last 0.2 s (default 0.05)
+        # to count, so clicks, coughs and street noise no longer start a turn or cut the agent
+        # off. A short "yes" is longer than 0.2 s.
+        _vad = silero.VAD.load(
+            sample_rate=VAD_SAMPLE_RATE,
+            min_silence_duration=0.4,
+            min_speech_duration=0.2,
+            activation_threshold=0.6,
+        )
     return _vad

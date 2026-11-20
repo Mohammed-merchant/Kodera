@@ -61,3 +61,32 @@ async def test_model_markers_are_never_spoken() -> None:
 
     out = await stream(["<|channel>thought\n", "<channel|><|channel>thought\n"])
     assert out == [SAFE_SAY_AGAIN + " "]  # one safe sentence, never the markers
+
+
+async def test_a_stuck_gemma_reply_is_restarted_once(monkeypatch: Any) -> None:
+    """Gemma sometimes repeats "<|channel>thought" instead of answering: the agent drops that
+    reply at its first token and asks again with a nudge; a normal reply is untouched."""
+    from livekit.agents import Agent, llm
+
+    from app.pipeline import voice_pipeline
+
+    contexts: list[Any] = []
+
+    async def fake_llm_node(self: Any, ctx: Any, tools: Any, settings: Any) -> Any:
+        contexts.append(ctx)
+        stuck = len(contexts) == 1 and self.stuck
+        pieces = ["<|channel>", "thought\n", "<channel|>"] if stuck else ["Yes", ", I can help."]
+        for piece in pieces:
+            yield piece
+
+    monkeypatch.setattr(Agent.default, "llm_node", fake_llm_node)
+    agent_cls = voice_pipeline._agent_cls()
+    for stuck, calls in ((True, 2), (False, 1)):
+        contexts.clear()
+        agent = agent_cls(recorder=FakeRecorder(), instructions="test")
+        agent.stuck = stuck
+        out = [c async for c in agent._model_stream(llm.ChatContext.empty(), [], None)]
+        assert "".join(out) == "Yes, I can help." and len(contexts) == calls
+        if stuck:  # the retry carried the nudge as a system message
+            last = contexts[1].items[-1]
+            assert last.role == "system" and last.text_content == voice_pipeline.LOOP_NUDGE

@@ -32,6 +32,23 @@ from app.pipeline.prompts import build_greeting, build_system_prompt, language_r
 log = structlog.get_logger(__name__)
 
 FRAME_SECONDS = 0.1  # ready-made audio is handed to the session in 100 ms frames
+# Gemma 4's internal markers: a reply that starts with them is a stuck loop, not an answer.
+LOOP_MARKERS = ("<|channel>", "<channel|>")
+LOOP_NUDGE = "Reply to the caller now (or call a tool). Do not think first."
+
+
+def _loop_start(raw: str) -> bool | None:
+    """True: the reply starts with a Gemma marker (stuck). False: a normal reply. None: too
+    early to tell (the text so far could still be the start of a marker)."""
+    text = raw.lstrip()
+    if not text:
+        return None
+    for marker in LOOP_MARKERS:
+        if text.startswith(marker):
+            return True
+        if marker.startswith(text):
+            return None
+    return False
 
 
 async def gpu_server_reachable(settings: Settings) -> bool:
@@ -125,7 +142,7 @@ def _make_agent_class() -> type:
                 if first_spoken is None:
                     first_spoken = time.perf_counter() - started
 
-            async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
+            async for chunk in self._model_stream(chat_ctx, tools, model_settings):
                 if first_output is None and (
                     isinstance(chunk, str)
                     or (isinstance(chunk, llm.ChatChunk) and chunk.delta is not None
@@ -168,6 +185,56 @@ def _make_agent_class() -> type:
                 total_ms=_seconds_to_ms(time.perf_counter() - started),
                 tool_call=filler_said,
             )
+
+        async def _model_stream(
+            self,
+            chat_ctx: llm.ChatContext,
+            tools: list[llm.Tool],
+            model_settings: ModelSettings,
+        ) -> AsyncIterator[Any]:
+            """The model's raw output. Gemma 4 sometimes repeats its internal "<|channel>thought"
+            marker instead of answering (seen on some Gujarati sentences: 600 tokens, no answer).
+            That shows in the very first token, so the reply restarts once with a short nudge,
+            which reliably breaks it. Normal replies pass straight through."""
+            ctx = chat_ctx
+            for attempt in (1, 2):
+                stream = Agent.default.llm_node(self, ctx, tools, model_settings)
+                held: list[Any] = []
+                raw = ""
+                decided = attempt == 2  # the retry is not checked again
+                looping = False
+                try:
+                    async for chunk in stream:
+                        if decided:
+                            yield chunk
+                            continue
+                        held.append(chunk)
+                        delta = chunk.delta if isinstance(chunk, llm.ChatChunk) else None
+                        if isinstance(chunk, str):
+                            raw += chunk
+                        elif delta is not None:
+                            raw += delta.content or ""
+                        verdict = _loop_start(raw)
+                        if verdict is None and not (delta is not None and delta.tool_calls):
+                            continue  # could still become the marker: hold a moment
+                        if verdict:
+                            looping = True
+                            break
+                        decided = True
+                        for c in held:
+                            yield c
+                        held = []
+                finally:
+                    aclose = getattr(stream, "aclose", None)
+                    if aclose is not None:
+                        await aclose()
+                if not looping:
+                    for c in held:  # a reply too short to decide on
+                        yield c
+                    return
+                log.warning("model_loop_restarted")
+                ctx = chat_ctx.copy()
+                ctx.add_message(role="system", content=LOOP_NUDGE)
 
         async def tts_node(
             self, text: AsyncIterable[str], model_settings: ModelSettings

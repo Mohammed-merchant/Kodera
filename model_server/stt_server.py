@@ -30,6 +30,10 @@ DEVICE = env("WHISPER_DEVICE", "cuda")
 COMPUTE = env("WHISPER_COMPUTE_TYPE", "int8_float16")
 DEFAULT_LANG = env("WHISPER_LANGUAGE") or None  # None = auto-detect
 BEAM = int(env("WHISPER_BEAM_SIZE", "3"))
+# A segment is dropped as noise when Whisper rates it as probably not speech AND is unsure of
+# the words (both must hold). Stricter than Whisper's own skip (0.6 and -1.0).
+NOISE_NO_SPEECH = float(env("WHISPER_NOISE_NO_SPEECH", "0.5"))
+NOISE_LOGPROB = float(env("WHISPER_NOISE_LOGPROB", "-0.7"))
 # Hint about the topic of the calls. Helps with names, times and dates. A request can override it.
 DEFAULT_PROMPT = env("WHISPER_PROMPT") or None
 MAX_MB = int(env("MAX_UPLOAD_MB", "25"))
@@ -114,7 +118,17 @@ def _transcribe(audio, language, prompt):
             without_timestamps=True,  # we do not need them, and decoding is faster
             vad_filter=True,
         )
-        text = " ".join(s.text.strip() for s in segments).strip()
+        kept = []
+        for s in segments:
+            # Noise read as words ("Boop.", "Bye." from a click or a cough): Whisper thinks it is
+            # probably not speech AND is unsure of the words. Both must hold, so quiet or
+            # accented real speech (Hindi/Gujarati score lower) is kept.
+            if s.no_speech_prob > NOISE_NO_SPEECH and s.avg_logprob < NOISE_LOGPROB:
+                log.info("stt dropped noise: %r (no_speech %.2f, logprob %.2f)",
+                         s.text.strip()[:40], s.no_speech_prob, s.avg_logprob)
+                continue
+            kept.append(s.text.strip())
+        text = " ".join(kept).strip()
         return _drop_prompt_echo(text, hint), info
 
 
